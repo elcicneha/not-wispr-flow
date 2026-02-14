@@ -31,3 +31,8 @@ ENV/
 *.wav
 *.mp3
 *.flac
+
+# py2app build artifacts
+build/
+dist/
+*.app
