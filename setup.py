@@ -20,6 +20,9 @@ OPTIONS = {
     # Don't emulate command-line arguments
     'argv_emulation': False,
 
+    # App icon
+    'iconfile': 'icons/whispr_icon_1.icns',
+
     # App metadata and permissions
     'plist': {
         'CFBundleName': 'Whispr',
