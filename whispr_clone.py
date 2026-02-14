@@ -16,12 +16,77 @@ import numpy as np
 import sounddevice as sd
 from pynput import keyboard
 from pynput.keyboard import Key, Controller
+import logging
+import logging.handlers
+from pathlib import Path
+
+# ============================================================================
+# Logging Configuration
+# ============================================================================
+
+def setup_logging():
+    """
+    Configure logging with dual handlers: console + rotating file.
+
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    # Create logger
+    logger = logging.getLogger('whispr')
+
+    # Determine log level from DEBUG constant
+    log_level = logging.DEBUG if DEBUG else logging.INFO
+    logger.setLevel(log_level)
+
+    # Clear any existing handlers
+    logger.handlers.clear()
+
+    # Log format with timestamp
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    # Console handler (if running in terminal)
+    if sys.stdout.isatty():
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    # File handler (always enabled)
+    try:
+        # Create log directory
+        log_dir = Path.home() / 'Library' / 'Logs' / 'Whispr'
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create rotating file handler (10MB per file, keep 5 files)
+        log_file = log_dir / 'whispr.log'
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=5
+        )
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+    except Exception as e:
+        # If file logging fails, warn but continue
+        if sys.stdout.isatty():
+            print(f"Warning: Could not setup file logging: {e}")
+            print("Continuing with console logging only...")
+
+    return logger
+
+# Initialize logger (will be set in main())
+logger = None
 
 # ============================================================================
 # Configuration Constants
 # ============================================================================
 
-WHISPER_MODEL = "base"  # Options: tiny, base, small, medium, large
+WHISPER_MODEL = "small"  # Options: tiny, base, small, medium, large
 SAMPLE_RATE = 16000     # Whisper's native sample rate (Hz)
 CHANNELS = 1            # Mono audio
 DTYPE = 'int16'         # Audio data type for sounddevice
@@ -101,7 +166,7 @@ def initialize_whisper():
     try:
         from faster_whisper import WhisperModel
 
-        print(f"Loading Whisper model: {WHISPER_MODEL}")
+        logger.info(f"Loading Whisper model: {WHISPER_MODEL}")
 
         model = WhisperModel(
             WHISPER_MODEL,
@@ -109,13 +174,13 @@ def initialize_whisper():
             compute_type="int8"  # Optimized for CPU performance
         )
 
-        print(f"Whisper model loaded: {WHISPER_MODEL}")
+        logger.info(f"Whisper model loaded: {WHISPER_MODEL}")
         return model
 
     except Exception as e:
-        print(f"FATAL ERROR: Failed to load Whisper model")
-        print(f"Details: {e}")
-        print("Please check your internet connection (first download) and try again.")
+        logger.error(f"FATAL ERROR: Failed to load Whisper model")
+        logger.error(f"Details: {e}")
+        logger.error("Please check your internet connection (first download) and try again.")
         sys.exit(1)
 
 
@@ -135,8 +200,7 @@ def audio_callback(indata, frames, time_info, status):
         status: Stream status flags
     """
     if status:
-        if DEBUG:
-            print(f"Audio callback status: {status}")
+        logger.debug(f"Audio callback status: {status}")
 
     # Only append data when actively recording
     if state.is_recording:
@@ -162,8 +226,7 @@ def start_recording():
     state.audio_stream.start()
     state.is_recording = True
 
-    if DEBUG:
-        print(f"[DEBUG] Recording started - Mode: {state.mode}")
+    logger.debug(f"Recording started - Mode: {state.mode}")
 
 
 def stop_recording():
@@ -177,8 +240,7 @@ def stop_recording():
 
     state.is_recording = False
 
-    if DEBUG:
-        print(f"[DEBUG] Recording stopped - Buffer size: {len(state.audio_buffer)} chunks")
+    logger.debug(f"Recording stopped - Buffer size: {len(state.audio_buffer)} chunks")
 
     # Process transcription in separate thread to avoid blocking
     threading.Thread(target=transcribe_and_type, daemon=True).start()
@@ -195,7 +257,7 @@ def transcribe_and_type():
     try:
         # Check if buffer has data
         if not state.audio_buffer or len(state.audio_buffer) == 0:
-            print("No audio recorded")
+            logger.warning("No audio recorded")
             return
 
         # Combine all audio chunks into single array
@@ -208,11 +270,10 @@ def transcribe_and_type():
         # Check minimum duration
         duration = len(audio_float) / SAMPLE_RATE
         if duration < MIN_RECORDING_DURATION:
-            print(f"Audio too short ({duration:.2f}s), skipping transcription (minimum: {MIN_RECORDING_DURATION}s)")
+            logger.info(f"Audio too short ({duration:.2f}s), skipping transcription (minimum: {MIN_RECORDING_DURATION}s)")
             return
 
-        if DEBUG:
-            print(f"[DEBUG] Transcribing {duration:.2f}s of audio...")
+        logger.debug(f"Transcribing {duration:.2f}s of audio...")
 
         # Transcribe with Whisper
         segments, info = state.whisper_model.transcribe(
@@ -226,17 +287,17 @@ def transcribe_and_type():
         text = "".join(segment.text for segment in segments).strip()
 
         if not text:
-            print("No speech detected")
+            logger.info("No speech detected")
             return
 
-        # Always print transcription (even in non-debug mode)
-        print(f"Transcription: {text}")
+        # Always log transcription (even in non-debug mode)
+        logger.info(f"Transcription: {text}")
 
         # Type the text at cursor position
         state.keyboard_controller.type(text)
 
     except Exception as e:
-        print(f"Transcription error: {e}")
+        logger.error(f"Transcription error: {e}")
         if DEBUG:
             import traceback
             traceback.print_exc()
@@ -269,13 +330,13 @@ def on_press(key):
             if state.mode is None and not state.space_pressed:
                 state.mode = "hold"
                 start_recording()
-                print("Hold mode: Recording started")
+                logger.info("Hold mode: Recording started")
 
             # Stop toggle mode if currently in toggle mode
             elif state.mode == "toggle" and state.is_recording:
                 stop_recording()
                 state.mode = None
-                print("Recording stopped")
+                logger.info("Recording stopped")
 
         # Toggle key pressed (for activating hands-free mode)
         elif key == TOGGLE_KEY:
@@ -287,12 +348,11 @@ def on_press(key):
                     # Start fresh toggle mode
                     state.mode = "toggle"
                     start_recording()
-                    print("Toggle mode activated - recording started")
+                    logger.info("Toggle mode activated - recording started")
                 elif state.mode == "hold":
                     # Convert hold mode to toggle mode
                     state.mode = "toggle"
-                    if DEBUG:
-                        print("[DEBUG] Converted hold mode to toggle mode")
+                    logger.debug("Converted hold mode to toggle mode")
 
 
 def on_release(key):
@@ -311,7 +371,7 @@ def on_release(key):
             if state.mode == "hold" and state.is_recording:
                 stop_recording()
                 state.mode = None
-                print("Recording stopped")
+                logger.info("Recording stopped")
 
         # Toggle key released
         elif key == TOGGLE_KEY:
@@ -330,7 +390,7 @@ def test_microphone_access():
         bool: True if microphone is accessible, False otherwise
     """
     try:
-        print("Testing microphone access...")
+        logger.info("Testing microphone access...")
 
         # Try to open a test stream
         test_stream = sd.InputStream(
@@ -343,21 +403,22 @@ def test_microphone_access():
         test_stream.stop()
         test_stream.close()
 
-        print("Microphone access OK")
+        logger.info("Microphone access OK")
         return True
 
     except Exception as e:
-        print(f"\n{'='*60}")
-        print("ERROR: Microphone access denied or unavailable")
-        print(f"{'='*60}")
-        print(f"Details: {e}\n")
-        print("macOS Permissions Required:")
-        print("1. Open System Preferences (or System Settings)")
-        print("2. Go to Security & Privacy → Privacy")
-        print("3. Select 'Microphone' from the left sidebar")
-        print("4. Enable access for 'Terminal' (or your IDE/Python)")
-        print("\nPlease grant permission and restart the application.")
-        print(f"{'='*60}\n")
+        logger.error("=" * 60)
+        logger.error("ERROR: Microphone access denied or unavailable")
+        logger.error("=" * 60)
+        logger.error(f"Details: {e}")
+        logger.error("")
+        logger.error("macOS Permissions Required:")
+        logger.error("1. Open System Preferences (or System Settings)")
+        logger.error("2. Go to Security & Privacy → Privacy")
+        logger.error("3. Select 'Microphone' from the left sidebar")
+        logger.error("4. Enable access for 'Terminal' (or your IDE/Python)")
+        logger.error("\nPlease grant permission and restart the application.")
+        logger.error("=" * 60)
         return False
 
 
@@ -369,12 +430,12 @@ def check_accessibility_permission():
     Returns:
         bool: True (we'll verify during actual operation)
     """
-    print("\nNote: This app requires Accessibility permissions to type text.")
-    print("If text doesn't appear when you dictate:")
-    print("1. Open System Preferences → Security & Privacy → Privacy")
-    print("2. Select 'Accessibility' from the left sidebar")
-    print("3. Enable access for 'Terminal' (or your IDE/Python)")
-    print()
+    logger.info("\nNote: This app requires Accessibility permissions to type text.")
+    logger.info("If text doesn't appear when you dictate:")
+    logger.info("1. Open System Preferences → Security & Privacy → Privacy")
+    logger.info("2. Select 'Accessibility' from the left sidebar")
+    logger.info("3. Enable access for 'Terminal' (or your IDE/Python)")
+    logger.info("")
     return True
 
 
@@ -386,9 +447,15 @@ def main():
     """
     Main application entry point.
     """
-    print(f"\n{'='*60}")
-    print("Whispr Clone - Voice Dictation Tool")
-    print(f"{'='*60}\n")
+    global logger
+
+    # Setup logging first
+    logger = setup_logging()
+
+    logger.info("=" * 60)
+    logger.info("Whispr Clone - Voice Dictation Tool")
+    logger.info("=" * 60)
+    logger.info("")
 
     # Check microphone permissions
     if not test_microphone_access():
@@ -404,23 +471,22 @@ def main():
     state.keyboard_controller = Controller()
 
     # Print usage instructions
-    hotkey_name = str(HOTKEY).replace('Key.', '').replace('_', ' ').title()
-    toggle_name = str(TOGGLE_KEY).replace('Key.', '').title()
-
-    print(f"{'='*60}")
-    print("Whispr Clone is now running!")
-    print(f"{'='*60}\n")
-    print("Usage:")
-    print("  Press-and-Hold Mode:")
-    print(f"    - Hold {hotkey_name} → speak → release to transcribe")
-    print()
-    print("  Toggle/Hands-Free Mode:")
-    print(f"    - Press {hotkey_name} + {toggle_name} together → speak")
-    print(f"    - Press {hotkey_name} again to stop and transcribe")
-    print()
-    print(f"Settings: Model={WHISPER_MODEL}, Hotkey={hotkey_name}, Debug={'ON' if DEBUG else 'OFF'}")
-    print("\nPress Ctrl+C to quit")
-    print(f"{'='*60}\n")
+    logger.info("=" * 60)
+    logger.info("Whispr Clone is now running!")
+    logger.info("=" * 60)
+    logger.info("")
+    logger.info("Usage:")
+    logger.info("  Press-and-Hold Mode:")
+    logger.info("    - Hold Right Control → speak → release to transcribe")
+    logger.info("")
+    logger.info("  Toggle/Hands-Free Mode:")
+    logger.info("    - Press Right Control + Space together → speak")
+    logger.info("    - Press Right Control again to stop and transcribe")
+    logger.info("")
+    logger.info(f"Settings: Model={WHISPER_MODEL}, Debug={'ON' if DEBUG else 'OFF'}")
+    logger.info("\nPress Ctrl+C to quit")
+    logger.info("=" * 60)
+    logger.info("")
 
     # Start keyboard listener
     listener = keyboard.Listener(
@@ -433,12 +499,12 @@ def main():
     try:
         listener.join()
     except KeyboardInterrupt:
-        print("\n\nShutting down Whispr Clone...")
+        logger.info("\n\nShutting down Whispr Clone...")
         listener.stop()
         if state.audio_stream is not None:
             state.audio_stream.stop()
             state.audio_stream.close()
-        print("Goodbye!")
+        logger.info("Goodbye!")
         sys.exit(0)
 
 

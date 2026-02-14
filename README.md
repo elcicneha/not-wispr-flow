@@ -161,6 +161,22 @@ DEBOUNCE_MS = 100       # Debounce time for key presses (milliseconds)
 
 ## Troubleshooting
 
+### Service won't start or isn't working
+
+**Check the logs first:**
+```bash
+# View application logs
+tail -50 ~/Library/Logs/Whispr/whispr.log
+
+# View error logs
+tail -50 ~/Library/Logs/Whispr/stderr.log
+
+# Check service status
+./scripts/check_status.sh
+```
+
+Most issues are related to permissions (microphone or accessibility).
+
 ### "Microphone access denied"
 
 **Solution:**
@@ -208,9 +224,32 @@ python3 -c "from faster_whisper import WhisperModel; WhisperModel('base')"
 ### Recording works but transcription is slow
 
 **Solutions:**
-- Use a smaller model (`tiny` instead of `base`)
+- Use a smaller model (`tiny` instead of `small`)
 - Close other applications to free RAM
 - On older Macs, stick with `tiny` or `base` models
+
+### Service installed but dictation doesn't work
+
+**Possible causes:**
+1. Permissions not granted for Python (not Terminal)
+2. Service crashed - check logs
+3. Wrong Python interpreter or virtual environment
+
+**Debug steps:**
+```bash
+# Check if service is actually running
+./scripts/check_status.sh
+
+# View error logs
+tail ~/Library/Logs/Whispr/stderr.log
+
+# Try running in terminal mode first to verify it works
+python3 whispr_clone.py
+
+# If terminal works but service doesn't, reinstall:
+./scripts/uninstall_service.sh
+./scripts/install_service.sh
+```
 
 ### Wrong keyboard detected (no Right Control)
 
@@ -285,11 +324,17 @@ Test dictation works in:
 
 ```
 wispr-flow-copy/
-├── whispr_clone.py      # Main application (single file)
-├── requirements.txt     # Python dependencies
-├── README.md           # This file
-├── .gitignore          # Git ignore rules
-└── venv/               # Virtual environment (not tracked)
+├── whispr_clone.py              # Main application (single file)
+├── requirements.txt             # Python dependencies
+├── README.md                    # This file
+├── .gitignore                   # Git ignore rules
+├── scripts/                     # Background service management
+│   ├── install_service.sh       # Install as LaunchAgent
+│   ├── uninstall_service.sh     # Remove LaunchAgent
+│   ├── check_status.sh          # Show service status
+│   ├── run_background.sh        # Simple background mode
+│   └── stop_background.sh       # Stop background mode
+└── venv/                        # Virtual environment (not tracked)
 ```
 
 ## How It Works
@@ -300,51 +345,104 @@ wispr-flow-copy/
 4. **Transcription**: `faster-whisper` converts audio → text using Whisper AI
 5. **Text Output**: `pynput.keyboard.Controller` types text at cursor position
 
-## Advanced Usage
+## Running as Background Service
 
-### Running in Background
+You can run Whispr in the background so you don't need to keep a terminal window open. There are two options:
 
-```bash
-# Run with caffeinate to prevent sleep
-caffeinate -i python3 whispr_clone.py
+### Option 1: LaunchAgent (Recommended - Auto-start on Login)
 
-# Or run in background (less recommended)
-nohup python3 whispr_clone.py &
-```
-
-### Auto-start on Login
-
-Create a LaunchAgent:
+Install Whispr as a macOS background service that starts automatically when you log in:
 
 ```bash
-# Create plist file
-nano ~/Library/LaunchAgents/com.whispr.clone.plist
+# One-time installation
+cd /path/to/wispr-flow-copy
+./scripts/install_service.sh
 ```
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.whispr.clone</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/path/to/venv/bin/python3</string>
-        <string>/path/to/whispr_clone.py</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
+**That's it!** Whispr now runs in the background and will auto-start on login. No terminal window needed.
+
+**Check Status:**
+```bash
+./scripts/check_status.sh
 ```
+
+**View Logs:**
+```bash
+# Follow logs in real-time
+tail -f ~/Library/Logs/Whispr/whispr.log
+
+# View recent activity
+./scripts/check_status.sh
+```
+
+**Uninstall Service:**
+```bash
+./scripts/uninstall_service.sh
+```
+
+**Manual Control:**
+```bash
+# Stop service
+launchctl unload ~/Library/LaunchAgents/com.whispr.dictation.plist
+
+# Start service
+launchctl load ~/Library/LaunchAgents/com.whispr.dictation.plist
+
+# Check if running
+launchctl list | grep whispr
+```
+
+### Option 2: Simple Background Mode
+
+If you don't need auto-start and just want to run in background temporarily:
 
 ```bash
-# Load agent
-launchctl load ~/Library/LaunchAgents/com.whispr.clone.plist
+# Start in background
+./scripts/run_background.sh
+
+# Stop when done
+./scripts/stop_background.sh
 ```
+
+### Option 3: Terminal Mode (Current Behavior)
+
+Run directly in terminal as before (still works!):
+
+```bash
+source venv/bin/activate
+python3 whispr_clone.py
+```
+
+## Logging
+
+All modes now write logs to files for debugging and monitoring:
+
+**Log Locations:**
+- Application logs: `~/Library/Logs/Whispr/whispr.log`
+- System output: `~/Library/Logs/Whispr/stdout.log`
+- Errors: `~/Library/Logs/Whispr/stderr.log`
+
+**Log Features:**
+- Automatic rotation (max 10MB per file, keeps 5 backups)
+- Timestamps on all messages
+- Configurable verbosity via `DEBUG` flag in script
+
+**View Logs:**
+```bash
+# Recent activity
+tail -50 ~/Library/Logs/Whispr/whispr.log
+
+# Follow in real-time
+tail -f ~/Library/Logs/Whispr/whispr.log
+
+# Errors only
+grep ERROR ~/Library/Logs/Whispr/whispr.log
+
+# View with status script
+./scripts/check_status.sh
+```
+
+**Note:** When running in terminal mode, you'll see output in both the console AND the log file.
 
 ## Contributing
 
