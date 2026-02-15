@@ -21,6 +21,7 @@ SETUP_PY="$PROJECT_DIR/setup.py"
 APP_BUNDLE="$PROJECT_DIR/dist/Whispr.app"
 APP_INSTALL_PATH="/Applications/Whispr.app"
 LOG_DIR="$HOME/Library/Logs/Whispr"
+CODESIGN_IDENTITY="Whispr Dev"
 
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -53,6 +54,19 @@ check_prerequisites() {
         exit 1
     fi
     log_success "Found setup.py"
+
+    # Check code signing certificate exists
+    if security find-certificate -c "$CODESIGN_IDENTITY" ~/Library/Keychains/login.keychain-db > /dev/null 2>&1; then
+        log_success "Found code signing certificate: '$CODESIGN_IDENTITY'"
+    else
+        log_error "Code signing certificate '$CODESIGN_IDENTITY' not found"
+        log_info "Without this certificate, you must re-grant permissions after every rebuild."
+        log_info "To create it (one-time setup):"
+        log_info "  1. Open Keychain Access: open /Applications/Utilities/Keychain\\ Access.app"
+        log_info "  2. Menu: Keychain Access > Certificate Assistant > Create a Certificate..."
+        log_info "  3. Name: '$CODESIGN_IDENTITY', Identity Type: Self Signed Root, Certificate Type: Code Signing"
+        exit 1
+    fi
 
     # Kill any running Whispr processes before reinstalling
     local whispr_pids
@@ -103,16 +117,6 @@ build_app_bundle() {
 
     log_success "App bundle created: $APP_BUNDLE"
 
-    # Code sign the app (preserves macOS permissions across rebuilds)
-    CODESIGN_IDENTITY="Whispr Dev"
-    log_info "Signing app with identity: $CODESIGN_IDENTITY"
-    if codesign --force --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE" 2>/dev/null; then
-        log_success "App signed successfully"
-    else
-        log_warning "Code signing failed - permissions may need re-granting after each rebuild"
-        log_warning "To fix: create a 'Whispr Dev' certificate in Keychain Access"
-    fi
-
     # Verify bundle
     log_info "Verifying bundle contents..."
     if [ -f "$SCRIPT_DIR/verify_bundle.sh" ]; then
@@ -134,6 +138,15 @@ install_app() {
     # Copy to /Applications
     cp -R "$APP_BUNDLE" "$APP_INSTALL_PATH"
 
+    # Sign the installed app (using persistent certificate preserves permissions across rebuilds)
+    log_info "Signing app with identity: $CODESIGN_IDENTITY"
+    if codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_INSTALL_PATH"; then
+        log_success "App signed successfully (permissions will persist across rebuilds)"
+    else
+        log_error "Code signing failed"
+        exit 1
+    fi
+
     log_success "Installed to: $APP_INSTALL_PATH"
 }
 
@@ -143,9 +156,12 @@ print_summary() {
     echo -e "${GREEN}Whispr has been installed!${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo -e "${YELLOW}IMPORTANT: You need to grant permissions to 'Whispr':${NC}"
+    echo -e "${YELLOW}IMPORTANT: Grant these permissions to 'Whispr' (first install only):${NC}"
     echo "  1. System Settings → Privacy & Security → Microphone → Enable 'Whispr'"
     echo "  2. System Settings → Privacy & Security → Accessibility → Enable 'Whispr'"
+    echo "  3. System Settings → Privacy & Security → Input Monitoring → Enable 'Whispr'"
+    echo ""
+    echo "  Permissions persist across rebuilds when signed with '$CODESIGN_IDENTITY' certificate."
     echo ""
     echo "How to use:"
     echo "  • Start: Open /Applications/Whispr.app (or use Spotlight)"

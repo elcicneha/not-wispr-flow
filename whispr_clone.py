@@ -405,12 +405,6 @@ def on_press(key):
       mode=hold  + space               → convert to toggle mode (keep recording)
       mode=toggle + hotkey             → stop recording, mode=None
     """
-    # DIAGNOSTIC: fires before any lock/debounce to confirm callback is called
-    import sys as _sys
-    print(f"[DIAG] on_press raw: {key}", file=_sys.stderr, flush=True)
-    if logger:
-        logger.debug("DIAG on_press raw: %s", key)
-
     if DEBUG:
         logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
 
@@ -690,8 +684,6 @@ def health_monitor(listener, shutdown_event):
     """Background thread: monitors listener health and stuck key states."""
     while listener.is_alive() and not shutdown_event.is_set():
         listener.join(timeout=5)
-        logger.debug("Health: listener alive=%s, recording=%s, mode=%s",
-                      listener.is_alive(), state.is_recording, state.mode)
         with state.lock:
             now = time.time()
             if state.hotkey_pressed and (now - state.hotkey_press_time > KEY_STATE_TIMEOUT):

@@ -90,7 +90,7 @@ DEBOUNCE_MS = 100                    # Key press debounce (milliseconds)
 
 ## Important Gotchas
 
-- **macOS permissions** must be granted to the **app bundle** ("Whispr"), not Terminal/Python: Microphone + Accessibility (Privacy & Security)
+- **macOS permissions** must be granted to the **app bundle** ("Whispr"), not Terminal/Python: Microphone + Accessibility + Input Monitoring (Privacy & Security)
 - **Clean build required** after code changes: `rm -rf build dist` before `python3 setup.py py2app`
 - **Exit code 0** on fatal errors is intentional — prevents LaunchAgent `KeepAlive` restart loops
 - **PID file lock** (`~/Library/Logs/Whispr/whispr.pid`) prevents duplicate instances
