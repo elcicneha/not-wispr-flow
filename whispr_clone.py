@@ -24,8 +24,12 @@ import fcntl
 import os
 import signal
 import atexit
+import subprocess
 import objc
-from AppKit import NSApplication, NSStatusBar, NSMenu, NSMenuItem, NSVariableStatusItemLength, NSObject
+from AppKit import (
+    NSApplication, NSStatusBar, NSMenu, NSMenuItem,
+    NSVariableStatusItemLength, NSObject, NSOnState, NSOffState
+)
 
 # ============================================================================
 # Logging Configuration
@@ -189,6 +193,10 @@ class AppState:
         # Timestamp when hotkey was pressed (for stuck-key detection)
         self.hotkey_press_time = 0
 
+        # Text insertion mode
+        self.last_transcription = None   # stores last transcribed text for "Retype Last"
+        self.use_type_mode = False       # False = clipboard paste (default), True = character-by-character
+
         # Debouncing
         self.last_press_time = 0
 
@@ -333,6 +341,42 @@ def stop_recording():
 # Transcription and Text Output
 # ============================================================================
 
+def insert_text(text):
+    """
+    Insert transcribed text at cursor position.
+    Uses clipboard paste by default (instant, unicode-safe).
+    Falls back to character-by-character typing when use_type_mode is enabled.
+    Always saves the text as last_transcription for "Retype Last" menu action.
+    """
+    state.last_transcription = text
+
+    if state.use_type_mode:
+        state.keyboard_controller.type(text)
+    else:
+        # Save current clipboard contents
+        try:
+            old_clipboard = subprocess.run(
+                ['pbpaste'], capture_output=True, text=True
+            ).stdout
+        except Exception:
+            old_clipboard = None
+
+        # Copy transcription to clipboard and paste
+        subprocess.run(['pbcopy'], input=text.encode('utf-8'), check=True)
+        time.sleep(0.05)
+        state.keyboard_controller.press(Key.cmd)
+        state.keyboard_controller.press('v')
+        state.keyboard_controller.release('v')
+        state.keyboard_controller.release(Key.cmd)
+
+        # Restore previous clipboard after a brief delay
+        if old_clipboard is not None:
+            time.sleep(0.2)
+            subprocess.run(
+                ['pbcopy'], input=old_clipboard.encode('utf-8'), check=True
+            )
+
+
 def transcribe_and_type(audio_buffer):
     """
     Transcribe recorded audio using Whisper and type the result.
@@ -380,8 +424,8 @@ def transcribe_and_type(audio_buffer):
         logger.debug(f"Transcription: {text}")
         logger.info(f"Transcribed {len(text)} characters")
 
-        # Type the text at cursor position
-        state.keyboard_controller.type(text)
+        # Insert the text at cursor position
+        insert_text(text)
 
     except Exception as e:
         logger.error(f"Transcription error: {e}")
@@ -647,18 +691,45 @@ def acquire_pid_lock():
 # Menu Bar Icon
 # ============================================================================
 
-class QuitDelegate(NSObject):
-    """Handles Quit menu action."""
+class MenuDelegate(NSObject):
+    """Handles all menu bar actions: Retype Last, Paste Mode toggle, Quit."""
     shutdown_event = None
+    paste_mode_item = None
+
+    def retypeLast_(self, sender):
+        """Type last transcription character-by-character in a background thread."""
+        text = state.last_transcription
+        if text:
+            threading.Thread(
+                target=state.keyboard_controller.type,
+                args=(text,),
+                daemon=True
+            ).start()
+
+    def togglePasteMode_(self, sender):
+        """Toggle between clipboard paste and character-by-character typing."""
+        state.use_type_mode = not state.use_type_mode
+        if self.paste_mode_item:
+            self.paste_mode_item.setState_(
+                NSOffState if state.use_type_mode else NSOnState
+            )
+        mode_name = "Type" if state.use_type_mode else "Paste"
+        logger.info(f"Text insertion mode: {mode_name}")
 
     def quit_(self, sender):
         if self.shutdown_event:
             self.shutdown_event.set()
         NSApplication.sharedApplication().terminate_(None)
 
+    def validateMenuItem_(self, item):
+        """Enable/disable menu items dynamically."""
+        if item.action() == b"retypeLast:":
+            return state.last_transcription is not None
+        return True
+
 
 def setup_menu_bar(shutdown_event):
-    """Create a menu bar status icon with a Quit option."""
+    """Create a menu bar status icon with Retype Last, Paste Mode toggle, and Quit."""
     app = NSApplication.sharedApplication()
 
     status_bar = NSStatusBar.systemStatusBar()
@@ -666,11 +737,35 @@ def setup_menu_bar(shutdown_event):
     button = status_item.button()
     button.setTitle_("\U0001f3a4")  # microphone emoji
 
-    delegate = QuitDelegate.alloc().init()
+    delegate = MenuDelegate.alloc().init()
     delegate.shutdown_event = shutdown_event
 
     menu = NSMenu.alloc().init()
-    quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit Whispr", "quit:", "")
+
+    # Retype Last — grayed out when no transcription available
+    retype_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Retype Last", "retypeLast:", ""
+    )
+    retype_item.setTarget_(delegate)
+    menu.addItem_(retype_item)
+
+    menu.addItem_(NSMenuItem.separatorItem())
+
+    # Paste Mode toggle — checked by default (paste mode ON)
+    paste_mode_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Paste Mode", "togglePasteMode:", ""
+    )
+    paste_mode_item.setTarget_(delegate)
+    paste_mode_item.setState_(NSOnState)
+    delegate.paste_mode_item = paste_mode_item
+    menu.addItem_(paste_mode_item)
+
+    menu.addItem_(NSMenuItem.separatorItem())
+
+    # Quit
+    quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Quit Whispr", "quit:", ""
+    )
     quit_item.setTarget_(delegate)
     menu.addItem_(quit_item)
 
