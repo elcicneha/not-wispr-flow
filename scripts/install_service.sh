@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Whispr Service Installer
-# Installs Whispr as a macOS LaunchAgent for auto-start on login
+# Whispr App Installer
+# Builds and installs Whispr.app to /Applications
 #
 
 set -e  # Exit on error
@@ -17,11 +17,9 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
-MAIN_SCRIPT="$PROJECT_DIR/whispr_clone.py"
 SETUP_PY="$PROJECT_DIR/setup.py"
 APP_BUNDLE="$PROJECT_DIR/dist/Whispr.app"
 APP_INSTALL_PATH="/Applications/Whispr.app"
-PLIST_DEST="$HOME/Library/LaunchAgents/com.whispr.dictation.plist"
 LOG_DIR="$HOME/Library/Logs/Whispr"
 
 # Functions
@@ -32,8 +30,8 @@ log_warning() { echo -e "${YELLOW}[!]${NC} $1"; }
 
 print_header() {
     echo ""
-    echo "Whispr Service Installer"
-    echo "========================"
+    echo "Whispr App Installer"
+    echo "===================="
     echo ""
 }
 
@@ -56,18 +54,20 @@ check_prerequisites() {
     fi
     log_success "Found setup.py"
 
-    # Check if already installed
-    if launchctl list 2>/dev/null | grep -q "com.whispr.dictation"; then
-        log_warning "Service is already installed and running"
-        read -p "Do you want to reinstall? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            log_info "Installation cancelled"
-            exit 0
-        fi
-        log_info "Unloading existing service..."
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+    # Kill any running Whispr processes before reinstalling
+    local whispr_pids
+    whispr_pids=$(pgrep -fx ".*/Whispr\.app/Contents/MacOS/Whispr" 2>/dev/null) || true
+    if [ -n "$whispr_pids" ]; then
+        log_info "Stopping running Whispr processes..."
+        echo "$whispr_pids" | xargs kill 2>/dev/null || true
         sleep 1
+    fi
+
+    # Remove stale LaunchAgent if it exists
+    if [ -f "$HOME/Library/LaunchAgents/com.whispr.dictation.plist" ]; then
+        log_info "Removing old LaunchAgent..."
+        launchctl unload "$HOME/Library/LaunchAgents/com.whispr.dictation.plist" 2>/dev/null || true
+        rm -f "$HOME/Library/LaunchAgents/com.whispr.dictation.plist"
     fi
 
     log_success "Prerequisites check passed"
@@ -76,7 +76,8 @@ check_prerequisites() {
 create_log_directory() {
     log_info "Creating log directory..."
     mkdir -p "$LOG_DIR"
-    log_success "Created: $LOG_DIR"
+    chmod 700 "$LOG_DIR"
+    log_success "Created: $LOG_DIR (permissions: 700)"
 }
 
 build_app_bundle() {
@@ -102,6 +103,16 @@ build_app_bundle() {
 
     log_success "App bundle created: $APP_BUNDLE"
 
+    # Code sign the app (preserves macOS permissions across rebuilds)
+    CODESIGN_IDENTITY="Whispr Dev"
+    log_info "Signing app with identity: $CODESIGN_IDENTITY"
+    if codesign --force --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE" 2>/dev/null; then
+        log_success "App signed successfully"
+    else
+        log_warning "Code signing failed - permissions may need re-granting after each rebuild"
+        log_warning "To fix: create a 'Whispr Dev' certificate in Keychain Access"
+    fi
+
     # Verify bundle
     log_info "Verifying bundle contents..."
     if [ -f "$SCRIPT_DIR/verify_bundle.sh" ]; then
@@ -126,125 +137,25 @@ install_app() {
     log_success "Installed to: $APP_INSTALL_PATH"
 }
 
-generate_plist() {
-    log_info "Generating plist file..."
-
-    # Create plist with app bundle path
-    cat > "$PLIST_DEST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.whispr.dictation</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>$APP_INSTALL_PATH/Contents/MacOS/Whispr</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <string>$HOME</string>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
-
-    <key>StandardOutPath</key>
-    <string>$LOG_DIR/stdout.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>$LOG_DIR/stderr.log</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    </dict>
-
-    <key>ProcessType</key>
-    <string>Interactive</string>
-
-    <key>Nice</key>
-    <integer>0</integer>
-</dict>
-</plist>
-EOF
-
-    log_success "Generated plist at: $PLIST_DEST"
-}
-
-validate_plist() {
-    log_info "Validating plist syntax..."
-
-    if ! plutil -lint "$PLIST_DEST" > /dev/null 2>&1; then
-        log_error "Invalid plist syntax"
-        plutil -lint "$PLIST_DEST"
-        exit 1
-    fi
-
-    log_success "Plist syntax is valid"
-}
-
-load_service() {
-    log_info "Loading service..."
-
-    if ! launchctl load "$PLIST_DEST" 2>/dev/null; then
-        log_error "Failed to load service"
-        log_info "Check permissions and try manually:"
-        log_info "  launchctl load $PLIST_DEST"
-        exit 1
-    fi
-
-    # Wait a moment for service to start
-    sleep 2
-
-    # Verify service is running
-    if launchctl list 2>/dev/null | grep -q "com.whispr.dictation"; then
-        log_success "Service loaded successfully"
-    else
-        log_error "Service loaded but not running"
-        log_info "Check logs for errors:"
-        log_info "  tail $LOG_DIR/stderr.log"
-        exit 1
-    fi
-}
-
 print_summary() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${GREEN}Whispr is now running as a background service!${NC}"
+    echo -e "${GREEN}Whispr has been installed!${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo -e "${YELLOW}IMPORTANT: You need to grant permissions to 'Whispr':${NC}"
-    echo "  1. System Preferences → Privacy & Security → Microphone"
-    echo "     → Enable 'Whispr'"
-    echo "  2. System Preferences → Privacy & Security → Accessibility"
-    echo "     → Enable 'Whispr'"
+    echo "  1. System Settings → Privacy & Security → Microphone → Enable 'Whispr'"
+    echo "  2. System Settings → Privacy & Security → Accessibility → Enable 'Whispr'"
     echo ""
-    echo "  (If you previously granted permissions to 'Python', those won't"
-    echo "   transfer to the new app - you need to re-grant them.)"
-    echo ""
-    echo "Next steps:"
-    echo "  • Test dictation in any application"
-    echo "  • View logs: tail -f $LOG_DIR/whispr.log"
-    echo "  • Check status: $SCRIPT_DIR/check_status.sh"
-    echo "  • Uninstall: $SCRIPT_DIR/uninstall_service.sh"
+    echo "How to use:"
+    echo "  • Start: Open /Applications/Whispr.app (or use Spotlight)"
+    echo "  • Running: Look for the microphone icon in the menu bar"
+    echo "  • Stop: Click the menu bar icon → Quit Whispr"
     echo ""
     echo "Log files:"
     echo "  • Application: $LOG_DIR/whispr.log"
-    echo "  • System out:  $LOG_DIR/stdout.log"
-    echo "  • Errors:      $LOG_DIR/stderr.log"
     echo ""
-    echo "The service will automatically start on login."
+    echo "Uninstall: $SCRIPT_DIR/uninstall_service.sh"
     echo ""
 }
 
@@ -255,9 +166,6 @@ main() {
     build_app_bundle
     install_app
     create_log_directory
-    generate_plist
-    validate_plist
-    load_service
     print_summary
 }
 

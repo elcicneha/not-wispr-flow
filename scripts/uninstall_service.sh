@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Whispr Service Uninstaller
-# Removes Whispr LaunchAgent and optionally cleans up logs
+# Whispr Uninstaller
+# Full cleanup: kills processes, removes app, logs, and build artifacts
 #
 
 set -e
@@ -13,7 +13,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLIST_FILE="$HOME/Library/LaunchAgents/com.whispr.dictation.plist"
+APP_INSTALL_PATH="/Applications/Whispr.app"
 LOG_DIR="$HOME/Library/Logs/Whispr"
 
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -22,8 +25,8 @@ log_info() { echo -e "${YELLOW}[i]${NC} $1"; }
 
 print_header() {
     echo ""
-    echo "Whispr Service Uninstaller"
-    echo "=========================="
+    echo "Whispr Uninstaller"
+    echo "=================="
     echo ""
 }
 
@@ -40,52 +43,70 @@ unload_service() {
     fi
 }
 
+kill_processes() {
+    log_info "Checking for running Whispr processes..."
+
+    local whispr_pids
+    whispr_pids=$(pgrep -fx ".*/Whispr\.app/Contents/MacOS/Whispr" 2>/dev/null) || true
+    if [ -n "$whispr_pids" ]; then
+        echo "$whispr_pids" | xargs kill 2>/dev/null || true
+        sleep 1
+        log_success "Killed running Whispr processes"
+    else
+        log_info "No running processes found"
+    fi
+}
+
 remove_plist() {
     if [ -f "$PLIST_FILE" ]; then
-        log_info "Removing plist file..."
-
-        # Backup to /tmp
-        cp "$PLIST_FILE" "/tmp/com.whispr.dictation.plist.backup"
         rm "$PLIST_FILE"
-
         log_success "Removed: $PLIST_FILE"
-        log_info "Backup saved to: /tmp/com.whispr.dictation.plist.backup"
     else
         log_info "Plist file not found (already removed)"
     fi
 }
 
+remove_app() {
+    if [ -d "$APP_INSTALL_PATH" ]; then
+        rm -rf "$APP_INSTALL_PATH"
+        log_success "Removed: $APP_INSTALL_PATH"
+    else
+        log_info "App bundle not found (already removed)"
+    fi
+}
+
 cleanup_logs() {
     if [ -d "$LOG_DIR" ]; then
-        echo ""
-        log_info "Found log directory: $LOG_DIR"
-
-        # Show log sizes
-        echo ""
-        du -sh "$LOG_DIR"/* 2>/dev/null | while read size file; do
-            echo "  - $(basename "$file") ($size)"
-        done
-
-        echo ""
-        read -p "Remove log files? (y/n) " -n 1 -r
-        echo
-
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$LOG_DIR"
-            log_success "Removed log directory"
-        else
-            log_info "Keeping log files"
-        fi
+        rm -rf "$LOG_DIR"
+        log_success "Removed: $LOG_DIR"
     else
         log_info "No log directory found"
     fi
 }
 
+cleanup_build_artifacts() {
+    local removed=false
+
+    if [ -d "$PROJECT_DIR/build" ]; then
+        rm -rf "$PROJECT_DIR/build"
+        removed=true
+    fi
+
+    if [ -d "$PROJECT_DIR/dist" ]; then
+        rm -rf "$PROJECT_DIR/dist"
+        removed=true
+    fi
+
+    if [ "$removed" = true ]; then
+        log_success "Removed: build/ and dist/"
+    else
+        log_info "No build artifacts found"
+    fi
+}
+
 print_summary() {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${GREEN}Whispr service has been uninstalled${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${GREEN}Whispr has been completely uninstalled${NC}"
     echo ""
     echo "To reinstall, run:"
     echo "  ./scripts/install_service.sh"
@@ -95,8 +116,11 @@ print_summary() {
 main() {
     print_header
     unload_service
+    kill_processes
     remove_plist
+    remove_app
     cleanup_logs
+    cleanup_build_artifacts
     print_summary
 }
 

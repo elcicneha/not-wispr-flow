@@ -19,6 +19,13 @@ from pynput.keyboard import Key, Controller
 import logging
 import logging.handlers
 from pathlib import Path
+import ctypes
+import fcntl
+import os
+import signal
+import atexit
+import objc
+from AppKit import NSApplication, NSStatusBar, NSMenu, NSMenuItem, NSVariableStatusItemLength, NSObject
 
 # ============================================================================
 # Logging Configuration
@@ -56,16 +63,18 @@ def setup_logging():
 
     # File handler (always enabled)
     try:
-        # Create log directory
+        # Create log directory with restricted permissions (transcriptions may contain sensitive data)
         log_dir = Path.home() / 'Library' / 'Logs' / 'Whispr'
         log_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(log_dir, 0o700)
 
         # Create rotating file handler (10MB per file, keep 5 files)
         log_file = log_dir / 'whispr.log'
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
             maxBytes=10 * 1024 * 1024,  # 10 MB
-            backupCount=5
+            backupCount=5,
+            encoding='utf-8'
         )
         file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
@@ -93,23 +102,56 @@ DTYPE = 'int16'         # Audio data type for sounddevice
 DEBUG = True            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
+MAX_RECORDING_DURATION = 300  # Maximum recording length in seconds (safety limit)
 
 # ============================================================================
 # HOTKEY CONFIGURATION - Change these to customize your recording keys!
 # ============================================================================
-# Available options for HOTKEY:
-#   Key.ctrl_r     - Right Control key (default, may not exist on some keyboards)
-#   Key.ctrl_l     - Left Control key
-#   Key.cmd_r      - Right Command (⌘) key
-#   Key.cmd_l      - Left Command (⌘) key
-#   Key.alt_r      - Right Option/Alt key
-#   Key.alt_l      - Left Option/Alt key
-#   Key.f13        - F13 key (good if you have it)
-#   Key.f14        - F14 key
-#   Key.caps_lock  - Caps Lock key
+# HOTKEY_KEYS is a set — pynput may report Key.ctrl, Key.ctrl_r, or Key.ctrl_l
+# depending on macOS version, keyboard layout, and backend. Including all
+# variants that should count as "the hotkey" eliminates mismatches.
+#
+# Examples:
+#   {Key.ctrl, Key.ctrl_r}           - Right Control (default, broadest match)
+#   {Key.ctrl_r}                     - Right Control only (strict)
+#   {Key.ctrl, Key.ctrl_l}           - Left Control
+#   {Key.cmd_r}                      - Right Command (⌘)
+#   {Key.alt_r, Key.alt}             - Right Option/Alt
+#   {Key.f13}                        - F13
 
-HOTKEY = Key.ctrl      # Main recording trigger key
-TOGGLE_KEY = Key.space   # Key to combine with HOTKEY for toggle mode
+HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}  # All key codes that trigger recording
+TOGGLE_KEY = Key.space                # Key to combine with hotkey for toggle mode
+
+KEY_STATE_TIMEOUT = 60  # Seconds before a "stuck" key press is auto-reset
+
+
+def is_hotkey(key):
+    """Check if a key event matches any of the configured hotkey variants."""
+    return key in HOTKEY_KEYS
+
+
+def validate_config():
+    """Validate configuration constants at startup. Exits on invalid config."""
+    errors = []
+    if not HOTKEY_KEYS or not isinstance(HOTKEY_KEYS, set):
+        errors.append("HOTKEY_KEYS must be a non-empty set of Key values")
+    if TOGGLE_KEY in HOTKEY_KEYS:
+        errors.append("TOGGLE_KEY cannot be the same as a HOTKEY_KEYS entry")
+    if DEBOUNCE_MS < 0:
+        errors.append(f"DEBOUNCE_MS must be >= 0, got {DEBOUNCE_MS}")
+    if MIN_RECORDING_DURATION <= 0:
+        errors.append(f"MIN_RECORDING_DURATION must be > 0, got {MIN_RECORDING_DURATION}")
+    if MAX_RECORDING_DURATION <= MIN_RECORDING_DURATION:
+        errors.append(f"MAX_RECORDING_DURATION ({MAX_RECORDING_DURATION}) must be > MIN_RECORDING_DURATION ({MIN_RECORDING_DURATION})")
+    if SAMPLE_RATE <= 0:
+        errors.append(f"SAMPLE_RATE must be > 0, got {SAMPLE_RATE}")
+    if WHISPER_MODEL not in ("tiny", "base", "small", "medium", "large"):
+        errors.append(f"WHISPER_MODEL must be one of tiny/base/small/medium/large, got '{WHISPER_MODEL}'")
+    if errors:
+        for e in errors:
+            print(f"Configuration error: {e}", file=sys.stderr)
+        sys.exit(0)
+
 
 # ============================================================================
 # Application State
@@ -141,8 +183,11 @@ class AppState:
         self.lock = threading.Lock()
 
         # Key state tracking
-        self.right_ctrl_pressed = False
+        self.hotkey_pressed = False
         self.space_pressed = False
+
+        # Timestamp when hotkey was pressed (for stuck-key detection)
+        self.hotkey_press_time = 0
 
         # Debouncing
         self.last_press_time = 0
@@ -181,7 +226,8 @@ def initialize_whisper():
         logger.error(f"FATAL ERROR: Failed to load Whisper model")
         logger.error(f"Details: {e}")
         logger.error("Please check your internet connection (first download) and try again.")
-        sys.exit(1)
+        # Exit 0 so LaunchAgent KeepAlive doesn't create an infinite restart loop
+        sys.exit(0)
 
 
 # ============================================================================
@@ -200,68 +246,108 @@ def audio_callback(indata, frames, time_info, status):
         status: Stream status flags
     """
     if status:
-        logger.debug(f"Audio callback status: {status}")
+        logger.warning(f"Audio callback status: {status}")
 
-    # Only append data when actively recording
-    if state.is_recording:
-        state.audio_buffer.append(indata.copy())
+    # Use non-blocking lock to avoid audio glitches
+    if state.lock.acquire(blocking=False):
+        try:
+            if state.is_recording:
+                # Safety limit: stop appending if max duration exceeded
+                max_chunks = int(MAX_RECORDING_DURATION * SAMPLE_RATE / frames) if frames > 0 else float('inf')
+                if len(state.audio_buffer) < max_chunks:
+                    state.audio_buffer.append(indata.copy())
+                else:
+                    logger.warning("Max recording duration reached, stopping buffer append")
+        finally:
+            state.lock.release()
 
 
 def start_recording():
     """
     Start audio recording by creating and starting an audio stream.
+    Must be called with state.lock held.
+
+    Idempotent: safely cleans up any existing stream before starting.
+    On failure: guarantees state is clean (is_recording=False, stream=None).
+    Raises on failure so the caller can reset mode.
     """
-    # Clear the audio buffer
+    # Clean up any existing stream first (idempotent)
+    _cleanup_stream()
+
     state.audio_buffer = []
+    state.is_recording = False
 
-    # Create audio input stream
-    state.audio_stream = sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=CHANNELS,
-        dtype=DTYPE,
-        callback=audio_callback
-    )
+    try:
+        state.audio_stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype=DTYPE,
+            callback=audio_callback
+        )
+        state.audio_stream.start()
+        state.is_recording = True
+        logger.debug(f"Recording started - Mode: {state.mode}")
+    except Exception:
+        # Guarantee clean state on failure
+        _cleanup_stream()
+        state.is_recording = False
+        raise
 
-    # Start the stream
-    state.audio_stream.start()
-    state.is_recording = True
 
-    logger.debug(f"Recording started - Mode: {state.mode}")
+def _cleanup_stream():
+    """Safely close the audio stream. Idempotent — safe to call anytime."""
+    if state.audio_stream is not None:
+        try:
+            state.audio_stream.stop()
+            state.audio_stream.close()
+        except Exception:
+            pass
+        state.audio_stream = None
 
 
 def stop_recording():
     """
     Stop audio recording and trigger transcription.
+    Must be called with state.lock held.
+
+    Idempotent: safe to call even if not currently recording.
+    Snapshots the buffer before cleanup so transcription thread owns its data.
     """
-    if state.audio_stream is not None:
-        state.audio_stream.stop()
-        state.audio_stream.close()
-        state.audio_stream = None
-
+    # Snapshot buffer, then clear — transcription thread gets its own copy
+    buffer_snapshot = list(state.audio_buffer)
+    state.audio_buffer = []
     state.is_recording = False
+    _cleanup_stream()
 
-    logger.debug(f"Recording stopped - Buffer size: {len(state.audio_buffer)} chunks")
+    if not buffer_snapshot:
+        logger.debug("Recording stopped - empty buffer, skipping transcription")
+        return
 
-    # Process transcription in separate thread to avoid blocking
-    threading.Thread(target=transcribe_and_type, daemon=True).start()
+    logger.debug(f"Recording stopped - Buffer size: {len(buffer_snapshot)} chunks")
+
+    # Transcription in separate thread — owns buffer_snapshot, no shared state
+    threading.Thread(target=transcribe_and_type, args=(buffer_snapshot,), daemon=True).start()
 
 
 # ============================================================================
 # Transcription and Text Output
 # ============================================================================
 
-def transcribe_and_type():
+def transcribe_and_type(audio_buffer):
     """
     Transcribe recorded audio using Whisper and type the result.
+
+    Args:
+        audio_buffer: List of numpy arrays containing recorded audio chunks
     """
     try:
         # Check if buffer has data
-        if not state.audio_buffer or len(state.audio_buffer) == 0:
+        if not audio_buffer or len(audio_buffer) == 0:
             logger.warning("No audio recorded")
             return
 
         # Combine all audio chunks into single array
-        audio_data = np.concatenate(state.audio_buffer, axis=0)
+        audio_data = np.concatenate(audio_buffer, axis=0)
 
         # Convert from int16 to float32 and normalize to [-1.0, 1.0]
         audio_float = audio_data.astype(np.float32) / 32768.0
@@ -290,8 +376,9 @@ def transcribe_and_type():
             logger.info("No speech detected")
             return
 
-        # Always log transcription (even in non-debug mode)
-        logger.info(f"Transcription: {text}")
+        # Only log transcription content in debug mode (may contain sensitive data)
+        logger.debug(f"Transcription: {text}")
+        logger.info(f"Transcribed {len(text)} characters")
 
         # Type the text at cursor position
         state.keyboard_controller.type(text)
@@ -311,46 +398,66 @@ def on_press(key):
     """
     Handle keyboard key press events.
 
-    Args:
-        key: The key that was pressed
+    State machine transitions on press:
+      mode=None  + hotkey              → hold mode, start recording
+      mode=None  + hotkey (space held) → toggle mode, start recording
+      mode=None  + space (hotkey held) → toggle mode, start recording
+      mode=hold  + space               → convert to toggle mode (keep recording)
+      mode=toggle + hotkey             → stop recording, mode=None
     """
+    # DIAGNOSTIC: fires before any lock/debounce to confirm callback is called
+    import sys as _sys
+    print(f"[DIAG] on_press raw: {key}", file=_sys.stderr, flush=True)
+    if logger:
+        logger.debug("DIAG on_press raw: %s", key)
+
+    if DEBUG:
+        logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
+
     current_time = time.time() * 1000  # Convert to milliseconds
 
     with state.lock:
-        # Hotkey pressed (configured key for recording)
-        if key == HOTKEY:
+        if is_hotkey(key):
             # Debounce: ignore if too soon after last press
             if current_time - state.last_press_time < DEBOUNCE_MS:
                 return
 
             state.last_press_time = current_time
-            state.right_ctrl_pressed = True
+            state.hotkey_pressed = True
+            state.hotkey_press_time = time.time()
 
-            # Start hold mode if no mode active and space not pressed
-            if state.mode is None and not state.space_pressed:
-                state.mode = "hold"
-                start_recording()
-                logger.info("Hold mode: Recording started")
+            if state.mode is None:
+                # Start recording — toggle if space already held, else hold
+                state.mode = "toggle" if state.space_pressed else "hold"
+                try:
+                    start_recording()
+                except Exception as e:
+                    logger.error(f"Failed to start recording: {e}")
+                    state.mode = None
+                    return
+                logger.info(f"{state.mode.capitalize()} mode: Recording started")
 
-            # Stop toggle mode if currently in toggle mode
             elif state.mode == "toggle" and state.is_recording:
                 stop_recording()
                 state.mode = None
-                logger.info("Recording stopped")
+                logger.info("Toggle mode: Recording stopped")
 
-        # Toggle key pressed (for activating hands-free mode)
         elif key == TOGGLE_KEY:
             state.space_pressed = True
 
-            # Activate toggle mode if Right Control is also pressed
-            if state.right_ctrl_pressed:
+            if state.hotkey_pressed:
                 if state.mode is None:
-                    # Start fresh toggle mode
+                    # Hotkey already held, space just arrived → toggle mode
                     state.mode = "toggle"
-                    start_recording()
-                    logger.info("Toggle mode activated - recording started")
+                    try:
+                        start_recording()
+                    except Exception as e:
+                        logger.error(f"Failed to start recording: {e}")
+                        state.mode = None
+                        return
+                    logger.info("Toggle mode: Recording started")
                 elif state.mode == "hold":
-                    # Convert hold mode to toggle mode
+                    # Convert hold → toggle (recording continues uninterrupted)
                     state.mode = "toggle"
                     logger.debug("Converted hold mode to toggle mode")
 
@@ -359,21 +466,22 @@ def on_release(key):
     """
     Handle keyboard key release events.
 
-    Args:
-        key: The key that was released
+    State machine transitions on release:
+      mode=hold + hotkey released → stop recording, mode=None
+      (toggle mode ignores hotkey release — stop happens on next hotkey press)
     """
-    with state.lock:
-        # Hotkey released
-        if key == HOTKEY:
-            state.right_ctrl_pressed = False
+    if DEBUG:
+        logger.debug(f"Key release: {key!r} (type={type(key).__name__})")
 
-            # Stop hold mode if currently in hold mode
+    with state.lock:
+        if is_hotkey(key):
+            state.hotkey_pressed = False
+
             if state.mode == "hold" and state.is_recording:
                 stop_recording()
                 state.mode = None
-                logger.info("Recording stopped")
+                logger.info("Hold mode: Recording stopped")
 
-        # Toggle key released
         elif key == TOGGLE_KEY:
             state.space_pressed = False
 
@@ -414,7 +522,7 @@ def test_microphone_access():
         logger.error("")
         logger.error("macOS Permissions Required:")
         logger.error("1. Open System Preferences (or System Settings)")
-        logger.error("2. Go to Security & Privacy → Privacy")
+        logger.error("2. Go to Security & Privacy > Privacy")
         logger.error("3. Select 'Microphone' from the left sidebar")
         logger.error("4. Enable access for 'Terminal' (or your IDE/Python)")
         logger.error("\nPlease grant permission and restart the application.")
@@ -422,21 +530,178 @@ def test_microphone_access():
         return False
 
 
+def is_accessibility_trusted(prompt=False):
+    """
+    Check if the process has Accessibility permission using macOS API.
+
+    Args:
+        prompt: If True, opens System Settings to the Accessibility pane
+
+    Returns:
+        bool: True if the process is trusted for accessibility
+    """
+    try:
+        app_services = ctypes.cdll.LoadLibrary(
+            '/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices'
+        )
+
+        if not prompt:
+            return bool(app_services.AXIsProcessTrusted())
+
+        # Use AXIsProcessTrustedWithOptions to show the system prompt
+        core_foundation = ctypes.cdll.LoadLibrary(
+            '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation'
+        )
+
+        core_foundation.CFStringCreateWithCString.restype = ctypes.c_void_p
+        core_foundation.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32
+        ]
+        key = core_foundation.CFStringCreateWithCString(
+            None, b"AXTrustedCheckOptionPrompt", 0x08000100  # kCFStringEncodingUTF8
+        )
+
+        kCFBooleanTrue = ctypes.c_void_p.in_dll(core_foundation, 'kCFBooleanTrue')
+
+        core_foundation.CFDictionaryCreate.restype = ctypes.c_void_p
+        core_foundation.CFDictionaryCreate.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p
+        ]
+        keys_arr = (ctypes.c_void_p * 1)(key)
+        vals_arr = (ctypes.c_void_p * 1)(kCFBooleanTrue)
+        kCFTypeDictionaryKeyCallBacks = ctypes.c_void_p.in_dll(
+            core_foundation, 'kCFTypeDictionaryKeyCallBacks'
+        )
+        kCFTypeDictionaryValueCallBacks = ctypes.c_void_p.in_dll(
+            core_foundation, 'kCFTypeDictionaryValueCallBacks'
+        )
+        opts = core_foundation.CFDictionaryCreate(
+            None, keys_arr, vals_arr, 1,
+            ctypes.byref(kCFTypeDictionaryKeyCallBacks),
+            ctypes.byref(kCFTypeDictionaryValueCallBacks)
+        )
+
+        app_services.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+        app_services.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+        result = app_services.AXIsProcessTrustedWithOptions(opts)
+
+        core_foundation.CFRelease(opts)
+        core_foundation.CFRelease(key)
+        return bool(result)
+    except Exception:
+        return False
+
+
 def check_accessibility_permission():
     """
     Check if accessibility permissions are granted for keyboard control.
-    Note: This is a basic check - full verification requires actual typing attempt.
+    If not granted, opens System Settings and waits up to 30 seconds for the user
+    to grant permission. Exits cleanly if not granted after waiting.
 
     Returns:
-        bool: True (we'll verify during actual operation)
+        bool: True if granted, exits with code 0 if not
     """
-    logger.info("\nNote: This app requires Accessibility permissions to type text.")
-    logger.info("If text doesn't appear when you dictate:")
-    logger.info("1. Open System Preferences → Security & Privacy → Privacy")
-    logger.info("2. Select 'Accessibility' from the left sidebar")
-    logger.info("3. Enable access for 'Terminal' (or your IDE/Python)")
-    logger.info("")
-    return True
+    if is_accessibility_trusted():
+        logger.info("Accessibility permission: OK")
+        return True
+
+    logger.warning("Accessibility permission not granted. Opening System Settings...")
+    is_accessibility_trusted(prompt=True)
+
+    for i in range(6):
+        time.sleep(5)
+        if is_accessibility_trusted():
+            logger.info("Accessibility permission: OK (granted after prompt)")
+            return True
+        logger.info("Waiting for accessibility permission... (%d/6)", i + 1)
+
+    logger.error("=" * 60)
+    logger.error("FATAL: Accessibility permission not granted after 30 seconds")
+    logger.error("Please enable 'Whispr' in System Settings > Accessibility and restart")
+    logger.error("=" * 60)
+    sys.exit(0)  # Clean exit so KeepAlive does NOT restart
+
+
+# ============================================================================
+# Instance Lock
+# ============================================================================
+
+PID_FILE = Path.home() / 'Library' / 'Logs' / 'Whispr' / 'whispr.pid'
+
+
+def acquire_pid_lock():
+    """
+    Prevent duplicate instances using a PID file lock.
+
+    Returns:
+        file object if lock acquired, None if another instance is running
+    """
+    try:
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        pid_file = open(PID_FILE, 'w')
+        os.chmod(PID_FILE, 0o600)
+        fcntl.flock(pid_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        pid_file.write(str(os.getpid()))
+        pid_file.flush()
+        return pid_file
+    except (IOError, OSError):
+        return None
+
+
+# ============================================================================
+# Menu Bar Icon
+# ============================================================================
+
+class QuitDelegate(NSObject):
+    """Handles Quit menu action."""
+    shutdown_event = None
+
+    def quit_(self, sender):
+        if self.shutdown_event:
+            self.shutdown_event.set()
+        NSApplication.sharedApplication().terminate_(None)
+
+
+def setup_menu_bar(shutdown_event):
+    """Create a menu bar status icon with a Quit option."""
+    app = NSApplication.sharedApplication()
+
+    status_bar = NSStatusBar.systemStatusBar()
+    status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
+    button = status_item.button()
+    button.setTitle_("\U0001f3a4")  # microphone emoji
+
+    delegate = QuitDelegate.alloc().init()
+    delegate.shutdown_event = shutdown_event
+
+    menu = NSMenu.alloc().init()
+    quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit Whispr", "quit:", "")
+    quit_item.setTarget_(delegate)
+    menu.addItem_(quit_item)
+
+    status_item.setMenu_(menu)
+
+    # Keep references alive
+    return status_item, delegate
+
+
+def health_monitor(listener, shutdown_event):
+    """Background thread: monitors listener health and stuck key states."""
+    while listener.is_alive() and not shutdown_event.is_set():
+        listener.join(timeout=5)
+        logger.debug("Health: listener alive=%s, recording=%s, mode=%s",
+                      listener.is_alive(), state.is_recording, state.mode)
+        with state.lock:
+            now = time.time()
+            if state.hotkey_pressed and (now - state.hotkey_press_time > KEY_STATE_TIMEOUT):
+                logger.warning("Hotkey stuck for >%ds, resetting state", KEY_STATE_TIMEOUT)
+                if state.is_recording:
+                    stop_recording()
+                state.hotkey_pressed = False
+                state.mode = None
+    # If listener died or shutdown requested, terminate the app
+    NSApplication.sharedApplication().terminate_(None)
 
 
 # ============================================================================
@@ -449,8 +714,18 @@ def main():
     """
     global logger
 
+    # Validate config before anything else
+    validate_config()
+
     # Setup logging first
     logger = setup_logging()
+
+    # Prevent duplicate instances
+    pid_lock = acquire_pid_lock()
+    if pid_lock is None:
+        logger.warning("Another Whispr instance is already running. Exiting.")
+        sys.exit(0)
+    atexit.register(lambda: pid_lock.close())
 
     logger.info("=" * 60)
     logger.info("Whispr Clone - Voice Dictation Tool")
@@ -459,9 +734,9 @@ def main():
 
     # Check microphone permissions
     if not test_microphone_access():
-        sys.exit(1)
+        sys.exit(0)  # Exit 0 so LaunchAgent KeepAlive doesn't restart loop
 
-    # Check accessibility permissions (informational)
+    # Check accessibility permissions (exits if not granted)
     check_accessibility_permission()
 
     # Initialize Whisper model
@@ -475,18 +750,42 @@ def main():
     logger.info("Whispr Clone is now running!")
     logger.info("=" * 60)
     logger.info("")
+    hotkey_name = ", ".join(str(k).replace("Key.", "") for k in HOTKEY_KEYS)
     logger.info("Usage:")
     logger.info("  Press-and-Hold Mode:")
-    logger.info("    - Hold Right Control → speak → release to transcribe")
+    logger.info(f"    - Hold [{hotkey_name}], speak, release to transcribe")
     logger.info("")
     logger.info("  Toggle/Hands-Free Mode:")
-    logger.info("    - Press Right Control + Space together → speak")
-    logger.info("    - Press Right Control again to stop and transcribe")
+    logger.info(f"    - Press [{hotkey_name}] + Space together, then speak")
+    logger.info(f"    - Press [{hotkey_name}] again to stop and transcribe")
     logger.info("")
     logger.info(f"Settings: Model={WHISPER_MODEL}, Debug={'ON' if DEBUG else 'OFF'}")
-    logger.info("\nPress Ctrl+C to quit")
     logger.info("=" * 60)
     logger.info("")
+
+    # Shutdown via flag — signal handler only sets the flag, no I/O
+    shutdown_event = threading.Event()
+
+    def shutdown(signum, frame):
+        shutdown_event.set()
+        NSApplication.sharedApplication().terminate_(None)
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    # Register cleanup for app termination
+    def cleanup():
+        logger.info("Shutting down Whispr Clone...")
+        listener.stop()
+        with state.lock:
+            if state.is_recording:
+                stop_recording()
+            else:
+                _cleanup_stream()
+            state.mode = None
+        logger.info("Goodbye!")
+
+    atexit.register(cleanup)
 
     # Start keyboard listener
     listener = keyboard.Listener(
@@ -495,17 +794,19 @@ def main():
     )
     listener.start()
 
-    # Keep application running
-    try:
-        listener.join()
-    except KeyboardInterrupt:
-        logger.info("\n\nShutting down Whispr Clone...")
-        listener.stop()
-        if state.audio_stream is not None:
-            state.audio_stream.stop()
-            state.audio_stream.close()
-        logger.info("Goodbye!")
-        sys.exit(0)
+    # Start health monitoring in background thread
+    health_thread = threading.Thread(
+        target=health_monitor,
+        args=(listener, shutdown_event),
+        daemon=True
+    )
+    health_thread.start()
+
+    # Set up menu bar icon (must be on main thread)
+    _menu_refs = setup_menu_bar(shutdown_event)
+
+    # Run macOS event loop (blocks until quit)
+    NSApplication.sharedApplication().run()
 
 
 # ============================================================================

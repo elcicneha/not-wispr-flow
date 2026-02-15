@@ -94,9 +94,7 @@ OPTIONS = {
     # Semi-standalone mode (include Python.framework)
     'semi_standalone': False,
 
-    # Code signing (optional - uncomment when ready)
-    # 'codesign_identity': None,
-    # 'codesign_entitlements': 'entitlements.plist',
+    # Code signing is done post-build in install_service.sh
 }
 
 setup(
