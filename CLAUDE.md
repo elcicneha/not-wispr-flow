@@ -24,8 +24,14 @@ python3 main.py
 rm -rf build dist && python3 setup.py py2app
 # Output: dist/Not Wispr Flow.app
 
-# Install to /Applications (builds + signs + installs)
+# FAST development workflow (after first install)
+./scripts/dev_install.sh
+# Updates .py files in existing app bundle (~1 second vs ~30+ seconds)
+# Use this for quick iteration when changing main.py or config.py
+
+# Full install to /Applications (builds + signs + installs)
 ./scripts/install_service.sh
+# Use this for: first install, dependency changes, or major changes
 
 # Uninstall (removes app, logs, build artifacts)
 ./scripts/uninstall_service.sh
