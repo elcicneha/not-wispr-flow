@@ -203,9 +203,6 @@ class AppState:
         # Debouncing
         self.last_press_time = 0
 
-        # Menu bar button reference (set by setup_menu_bar)
-        self.status_button = None
-
         # Buffer overflow to disk
         self.overflow_files = []        # Paths to flushed .npy temp files for current recording
         self.overflow_file_counter = 0  # Unique filename counter per recording
@@ -216,73 +213,160 @@ class AppState:
 state = AppState()
 
 
-def _load_menu_bar_icon(icon_name):
+# ============================================================================
+# Menu Bar Icon Management
+# ============================================================================
+# All menu bar icon logic consolidated in one place. The app only needs to
+# call update_menu_bar_icon(state_name) to change the icon state.
+
+class MenuBarIconManager:
+    """Manages menu bar icon state and animations."""
+
+    # Animation speeds in milliseconds - adjust these to change animation speed
+    RECORDING_FRAME_INTERVAL = 100   # Recording animation speed (fast, bouncy)
+    PROCESSING_FRAME_INTERVAL = 300  # Processing animation speed (slower, calmer)
+
+    def __init__(self):
+        self.status_button = None
+        self.animation_timer = None
+        self.current_frame = 0
+        self.current_state = None
+
+        # Load static icons
+        self._icons = {
+            'idle': self._load_icon('menubar_idle')
+        }
+
+        # Load recording animation frames (3 frames, ping-pong sequence)
+        self._recording_frames = [
+            self._load_icon(f'menubar_recording_{i}')
+            for i in range(1, 4)
+        ]
+        # Ping-pong sequence: 1→2→3→2→1→2→3→2... (indices: 0,1,2,1,0,1,2,1...)
+        self._recording_sequence = [0, 1, 2, 1]
+
+        # Load processing animation frames (3 frames, simple loop)
+        self._processing_frames = [
+            self._load_icon(f'menubar_processing_{i}')
+            for i in range(1, 4)
+        ]
+        # Simple loop: 1→2→3→1→2→3... (indices: 0,1,2,0,1,2...)
+        self._processing_sequence = [0, 1, 2]
+
+    def _load_icon(self, icon_name):
+        """Load a menu bar icon with @2x retina support."""
+        # Get icon directory
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.join(os.path.dirname(sys.executable), '..', 'Resources')
+        else:
+            base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icons')
+
+        icon_1x_path = os.path.join(base_path, f'{icon_name}.png')
+        icon_2x_path = os.path.join(base_path, f'{icon_name}@2x.png')
+
+        # Create NSImage with both resolutions
+        icon = NSImage.alloc().initWithSize_((22, 22))
+
+        if os.path.exists(icon_1x_path):
+            rep = NSImage.alloc().initWithContentsOfFile_(icon_1x_path)
+            if rep and rep.representations():
+                icon.addRepresentation_(rep.representations()[0])
+
+        if os.path.exists(icon_2x_path):
+            rep = NSImage.alloc().initWithContentsOfFile_(icon_2x_path)
+            if rep and rep.representations():
+                icon.addRepresentation_(rep.representations()[0])
+
+        icon.setTemplate_(True)  # Enable automatic dark mode inversion
+        return icon
+
+    def set_button(self, button):
+        """Set the NSStatusBarButton to update."""
+        self.status_button = button
+
+    def update_state(self, state_name):
+        """
+        Update menu bar icon for the given state.
+
+        Args:
+            state_name: One of 'idle', 'recording', or 'transcribing'
+        """
+        if state_name == self.current_state:
+            return  # Already in this state
+
+        self.current_state = state_name
+
+        if state_name == 'recording':
+            self._start_recording_animation()
+        elif state_name == 'transcribing':
+            self._start_processing_animation()
+        else:
+            self._stop_animation()
+            self._set_icon(self._icons.get(state_name, self._icons['idle']))
+
+    def _set_icon(self, icon):
+        """Set the menu bar icon (thread-safe)."""
+        if self.status_button is not None and icon is not None:
+            try:
+                self.status_button.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    'setImage:', icon, False
+                )
+            except Exception:
+                pass
+
+    def _start_recording_animation(self):
+        """Start the recording animation (ping-pong: 1→2→3→2→1)."""
+        self._stop_animation()
+        self.current_frame = 0
+
+        def animate():
+            if self.current_state == 'recording' and self.status_button is not None:
+                frame_idx = self._recording_sequence[self.current_frame]
+                self._set_icon(self._recording_frames[frame_idx])
+                self.current_frame = (self.current_frame + 1) % len(self._recording_sequence)
+
+                self.animation_timer = threading.Timer(self.RECORDING_FRAME_INTERVAL / 1000, animate)
+                self.animation_timer.daemon = True
+                self.animation_timer.start()
+
+        animate()
+
+    def _start_processing_animation(self):
+        """Start the processing animation (loop: 1→2→3→1→2→3)."""
+        self._stop_animation()
+        self.current_frame = 0
+
+        def animate():
+            if self.current_state == 'transcribing' and self.status_button is not None:
+                frame_idx = self._processing_sequence[self.current_frame]
+                self._set_icon(self._processing_frames[frame_idx])
+                self.current_frame = (self.current_frame + 1) % len(self._processing_sequence)
+
+                self.animation_timer = threading.Timer(self.PROCESSING_FRAME_INTERVAL / 1000, animate)
+                self.animation_timer.daemon = True
+                self.animation_timer.start()
+
+        animate()
+
+    def _stop_animation(self):
+        """Stop any running animation."""
+        if self.animation_timer is not None:
+            self.animation_timer.cancel()
+            self.animation_timer = None
+
+
+# Global icon manager instance
+_icon_manager = MenuBarIconManager()
+
+
+def update_menu_bar_icon(state_name):
     """
-    Load menu bar icon from icons directory with proper @2x retina support.
-
-    Args:
-        icon_name: Base name of icon (e.g., 'menubar_idle', 'menubar_recording')
-
-    Returns:
-        NSImage configured as a template image (auto-inverts for dark mode).
-    """
-    # Get the directory where main.py is located
-    if getattr(sys, 'frozen', False):
-        # Running as bundled .app
-        bundle_dir = os.path.dirname(sys.executable)
-        base_path = os.path.join(bundle_dir, '..', 'Resources')
-    else:
-        # Running as script
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        base_path = os.path.join(script_dir, 'icons')
-
-    icon_1x_path = os.path.join(base_path, f'{icon_name}.png')
-    icon_2x_path = os.path.join(base_path, f'{icon_name}@2x.png')
-
-    # Create NSImage and add both @1x and @2x representations
-    icon = NSImage.alloc().initWithSize_((22, 22))  # Base size in points
-
-    # Add @1x representation
-    if os.path.exists(icon_1x_path):
-        rep_1x = NSImage.alloc().initWithContentsOfFile_(icon_1x_path)
-        if rep_1x and rep_1x.representations():
-            icon.addRepresentation_(rep_1x.representations()[0])
-
-    # Add @2x representation for retina displays
-    if os.path.exists(icon_2x_path):
-        rep_2x = NSImage.alloc().initWithContentsOfFile_(icon_2x_path)
-        if rep_2x and rep_2x.representations():
-            icon.addRepresentation_(rep_2x.representations()[0])
-
-    icon.setTemplate_(True)  # Enable automatic dark mode inversion
-    return icon
-
-
-# Load menu bar icons for all states
-MENU_BAR_ICONS = {
-    'idle': _load_menu_bar_icon('menubar_idle'),
-    'recording': _load_menu_bar_icon('menubar_recording'),
-    'transcribing': _load_menu_bar_icon('menubar_processing')
-}
-
-
-def _update_menu_icon(state_name):
-    """
-    Update menu bar icon based on application state. Thread-safe.
+    Update the menu bar icon state. This is the only function the app needs to call.
 
     Args:
         state_name: One of 'idle', 'recording', or 'transcribing'
     """
-    # Get the appropriate icon for this state
-    icon = MENU_BAR_ICONS.get(state_name, MENU_BAR_ICONS['idle'])
-
-    try:
-        if state.status_button is not None and icon is not None:
-            state.status_button.performSelectorOnMainThread_withObject_waitUntilDone_(
-                'setImage:', icon, False
-            )
-    except Exception:
-        pass
+    _icon_manager.update_state(state_name)
 
 
 # ============================================================================
@@ -497,13 +581,13 @@ def start_recording():
         )
         state.audio_stream.start()
         state.is_recording = True
-        _update_menu_icon('recording')
+        update_menu_bar_icon('recording')
         logger.debug(f"Recording started - Mode: {state.mode}")
     except Exception:
         # Guarantee clean state on failure
         _cleanup_stream()
         state.is_recording = False
-        _update_menu_icon('idle')
+        update_menu_bar_icon('idle')
         raise
 
 
@@ -632,7 +716,7 @@ def stop_recording():
 
     if not buffer_snapshot and not overflow_snapshot:
         logger.debug("Recording stopped - empty buffer, skipping transcription")
-        _update_menu_icon('idle')
+        update_menu_bar_icon('idle')
         return
 
     # Calculate buffer statistics (in-memory portion only)
@@ -648,7 +732,7 @@ def stop_recording():
     # Set transcription flag and update UI before spawning thread
     state.is_transcribing = True
     state.transcription_start_time = time.time()
-    _update_menu_icon('transcribing')  # Show ⏳ icon
+    update_menu_bar_icon('transcribing')  # Show ⏳ icon
 
     # Transcription in separate thread — wrapper ensures cleanup
     threading.Thread(
@@ -675,7 +759,7 @@ def _transcription_wrapper(audio_buffer, **kwargs):
     finally:
         state.is_transcribing = False
         state.transcription_start_time = None
-        _update_menu_icon('idle')  # Reset to 🎤 icon
+        update_menu_bar_icon('idle')  # Reset to 🎤 icon
 
 
 # ============================================================================
@@ -1006,7 +1090,7 @@ def on_press(key):
                         logger.warning(f"Stuck recovery: mode={state.mode}, not recording, no data. Resetting to idle.")
                         _cleanup_stream()
                         state.mode = None
-                        _update_menu_icon('idle')
+                        update_menu_bar_icon('idle')
                         # Fall through to state.mode is None → start new recording
 
                 # Detect hung transcription (>60s) blocking the UI
@@ -1015,7 +1099,7 @@ def on_press(key):
                         logger.warning(f"Stuck recovery: transcription hung for >{time.time() - state.transcription_start_time:.0f}s. Clearing flag.")
                         state.is_transcribing = False
                         state.transcription_start_time = None
-                        _update_menu_icon('idle')
+                        update_menu_bar_icon('idle')
                     # Note: even with is_transcribing=True, user CAN start a new
                     # recording (transcription runs in its own thread). Fall through.
 
@@ -1107,7 +1191,7 @@ def on_release(key):
                         logger.warning("Stuck recovery (release): mode=hold, not recording, no data. Resetting.")
                         _cleanup_stream()
                         state.mode = None
-                        _update_menu_icon('idle')
+                        update_menu_bar_icon('idle')
 
             elif key == TOGGLE_KEY:
                 state.space_pressed = False
@@ -1332,9 +1416,10 @@ def setup_menu_bar(shutdown_event):
     status_bar = NSStatusBar.systemStatusBar()
     status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
     button = status_item.button()
-    if MENU_BAR_ICONS.get('idle') is not None:
-        button.setImage_(MENU_BAR_ICONS['idle'])
-    state.status_button = button
+
+    # Register button with icon manager and set initial icon
+    _icon_manager.set_button(button)
+    update_menu_bar_icon('idle')
 
     delegate = MenuDelegate.alloc().init()
     delegate.shutdown_event = shutdown_event

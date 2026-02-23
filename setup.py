@@ -18,10 +18,20 @@ DATA_FILES = [
     ('', [
         'icons/menubar_idle.png',
         'icons/menubar_idle@2x.png',
-        'icons/menubar_recording.png',
-        'icons/menubar_recording@2x.png',
-        'icons/menubar_processing.png',
-        'icons/menubar_processing@2x.png'
+        # Recording animation frames (3 frames, ping-pong: 1→2→3→2→1)
+        'icons/menubar_recording_1.png',
+        'icons/menubar_recording_1@2x.png',
+        'icons/menubar_recording_2.png',
+        'icons/menubar_recording_2@2x.png',
+        'icons/menubar_recording_3.png',
+        'icons/menubar_recording_3@2x.png',
+        # Processing animation frames (3 frames, loop: 1→2→3→1→2→3)
+        'icons/menubar_processing_1.png',
+        'icons/menubar_processing_1@2x.png',
+        'icons/menubar_processing_2.png',
+        'icons/menubar_processing_2@2x.png',
+        'icons/menubar_processing_3.png',
+        'icons/menubar_processing_3@2x.png'
     ])
 ]
 
