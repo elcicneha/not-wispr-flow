@@ -114,7 +114,7 @@ DTYPE = 'int16'         # Audio data type for sounddevice
 DEBUG = True            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
-MAX_RECORDING_DURATION = 300  # Maximum recording length in seconds (safety limit)
+MAX_RECORDING_DURATION = 36000  # Maximum recording length in seconds (10 hours - unrealistic safety limit)
 CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
 
 # ============================================================================
@@ -134,8 +134,6 @@ CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper c
 
 HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}  # All key codes that trigger recording
 TOGGLE_KEY = Key.space                # Key to combine with hotkey for toggle mode
-
-KEY_STATE_TIMEOUT = 10  # Seconds before a "stuck" key press is auto-reset
 
 
 def is_hotkey(key):
@@ -198,9 +196,6 @@ class AppState:
         # Key state tracking
         self.hotkey_pressed = False
         self.space_pressed = False
-
-        # Timestamp when hotkey was pressed (for stuck-key detection)
-        self.hotkey_press_time = 0
 
         # Text insertion mode
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
@@ -627,7 +622,6 @@ def on_press(key):
 
                 state.last_press_time = current_time
                 state.hotkey_pressed = True
-                state.hotkey_press_time = time.time()
 
                 if state.mode is None:
                     # Start recording — toggle if space already held, else hold
@@ -957,17 +951,9 @@ def setup_menu_bar(shutdown_event):
 
 
 def health_monitor(listener, shutdown_event):
-    """Background thread: monitors listener health and stuck key states."""
+    """Background thread: monitors listener health."""
     while listener.is_alive() and not shutdown_event.is_set():
         listener.join(timeout=5)
-        with state.lock:
-            now = time.time()
-            if state.hotkey_pressed and (now - state.hotkey_press_time > KEY_STATE_TIMEOUT):
-                logger.warning("Hotkey stuck for >%ds, resetting state", KEY_STATE_TIMEOUT)
-                if state.is_recording:
-                    stop_recording()
-                state.hotkey_pressed = False
-                state.mode = None
     # If listener died or shutdown requested, terminate the app
     NSApplication.sharedApplication().terminate_(None)
 
