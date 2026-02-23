@@ -6,7 +6,7 @@ A background script that provides voice dictation with two recording modes:
 1. Press-and-Hold: Hold Right Control to record, release to transcribe
 2. Toggle Mode: Press Right Control + Space to start, Right Control to stop
 
-Uses faster-whisper for offline speech-to-text transcription.
+Uses mlx-whisper for offline speech-to-text transcription (GPU-accelerated on Apple Silicon).
 """
 
 import sys
@@ -26,6 +26,7 @@ import signal
 import atexit
 import subprocess
 import json
+from collections import deque
 import objc
 from ApplicationServices import (
     AXUIElementCreateSystemWide,
@@ -108,12 +109,12 @@ logger = None
 # Configuration Constants
 # ============================================================================
 
-WHISPER_MODEL = "small"  # Options: tiny, base, small, medium, large
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # HuggingFace repo for mlx-whisper
 SAMPLE_RATE = 16000     # Whisper's native sample rate (Hz)
 CHANNELS = 1            # Mono audio
 DTYPE = 'int16'         # Audio data type for sounddevice
 DEBUG = False            # Set to False for minimal console output
-MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
+MIN_RECORDING_DURATION = 0.2  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
 FLUSH_BUFFER_THRESHOLD_MB = 5  # Flush buffer to disk when it exceeds this (crash recovery)
 CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
@@ -157,8 +158,8 @@ def validate_config():
         errors.append(f"FLUSH_BUFFER_THRESHOLD_MB must be >= 1, got {FLUSH_BUFFER_THRESHOLD_MB}")
     if SAMPLE_RATE <= 0:
         errors.append(f"SAMPLE_RATE must be > 0, got {SAMPLE_RATE}")
-    if WHISPER_MODEL not in ("tiny", "base", "small", "medium", "large"):
-        errors.append(f"WHISPER_MODEL must be one of tiny/base/small/medium/large, got '{WHISPER_MODEL}'")
+    if not WHISPER_MODEL:
+        errors.append("WHISPER_MODEL must be a non-empty HuggingFace model repo name")
     if errors:
         for e in errors:
             print(f"Configuration error: {e}", file=sys.stderr)
@@ -179,10 +180,11 @@ class AppState:
         # Current recording status
         self.is_recording = False
 
-        # Audio buffer to store recorded chunks
-        self.audio_buffer = []
+        # Audio buffer — lock-free deque for audio callback thread
+        self.audio_buffer = deque()
 
-        # Whisper model instance (loaded at startup)
+        # Transcription function: callable(audio_float: np.ndarray) -> str
+        # Initialized by initialize_whisper(), backend-agnostic
         self.whisper_model = None
 
         # Keyboard controller for typing output
@@ -254,24 +256,69 @@ def _update_menu_icon(state_name):
 
 def initialize_whisper():
     """
-    Initialize and load the Whisper model.
+    Initialize the Whisper backend and return a transcription function.
+
+    This is the ONLY function that knows about the specific Whisper backend.
+    To switch backends (e.g. faster-whisper, whisper.cpp), only modify this function.
+    The returned callable must accept a float32 numpy array and return a string.
+
+    All MLX/Metal GPU operations are pinned to a single dedicated thread to avoid
+    Metal command buffer threading assertions.
 
     Returns:
-        WhisperModel: Loaded Whisper model instance
+        callable: transcribe(audio_float: np.ndarray) -> str
     """
-    try:
-        from faster_whisper import WhisperModel
+    import queue
 
+    work_q = queue.Queue()
+    result_q = queue.Queue()
+
+    def mlx_worker():
+        """Dedicated thread — all MLX/Metal operations happen here."""
+        try:
+            import mlx_whisper
+
+            # Pre-warm: download + load model on this thread
+            silent_audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+            mlx_whisper.transcribe(silent_audio, path_or_hf_repo=WHISPER_MODEL, language="en")
+            result_q.put(True)
+
+            # Process transcription requests forever
+            while True:
+                audio_float = work_q.get()
+                try:
+                    result = mlx_whisper.transcribe(
+                        audio_float,
+                        path_or_hf_repo=WHISPER_MODEL,
+                        language="en",
+                    )
+                    result_q.put(result["text"].strip())
+                except Exception as e:
+                    result_q.put(e)
+        except Exception as e:
+            result_q.put(e)
+
+    try:
         logger.info(f"Loading Whisper model: {WHISPER_MODEL}")
 
-        model = WhisperModel(
-            WHISPER_MODEL,
-            device="cpu",
-            compute_type="int8"  # Optimized for CPU performance
-        )
+        worker = threading.Thread(target=mlx_worker, daemon=True)
+        worker.start()
+
+        # Wait for pre-warm to complete
+        warmup_result = result_q.get()
+        if isinstance(warmup_result, Exception):
+            raise warmup_result
 
         logger.info(f"Whisper model loaded: {WHISPER_MODEL}")
-        return model
+
+        def transcribe(audio_float):
+            work_q.put(audio_float)
+            result = result_q.get()
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        return transcribe
 
     except Exception as e:
         logger.error(f"FATAL ERROR: Failed to load Whisper model")
@@ -290,6 +337,9 @@ def audio_callback(indata, frames, time_info, status):
     Callback function for sounddevice audio stream.
     Called automatically for each audio chunk.
 
+    Lock-free: deque.append() is atomic under CPython's GIL,
+    so no lock is needed and no audio frames are ever dropped.
+
     Args:
         indata: Input audio data (numpy array)
         frames: Number of frames
@@ -299,12 +349,8 @@ def audio_callback(indata, frames, time_info, status):
     if status:
         logger.warning(f"Audio callback status: {status}")
 
-    if state.lock.acquire(blocking=False):
-        try:
-            if state.is_recording:
-                state.audio_buffer.append(indata.copy())
-        finally:
-            state.lock.release()
+    if state.is_recording:
+        state.audio_buffer.append(indata.copy())
 
 
 def start_recording():
@@ -319,7 +365,7 @@ def start_recording():
     # Clean up any existing stream first (idempotent)
     _cleanup_stream()
 
-    state.audio_buffer = []
+    state.audio_buffer.clear()
     state.overflow_files = []
     state.overflow_file_counter = 0
     state.recording_start_time = time.time()
@@ -370,7 +416,7 @@ def cleanup_stale_overflow_files():
         logger.warning(f"Failed to clean stale overflow files: {e}")
 
 
-def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcription_chars):
+def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcription_chars, processing_sec):
     """Append one JSON line of recording analytics to STATS_FILE."""
     try:
         entry = {
@@ -380,6 +426,7 @@ def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcrip
             "mode": mode,
             "overflow_files": overflow_count,
             "transcription_chars": transcription_chars,
+            "processing_sec": round(processing_sec, 2),
         }
         with open(STATS_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -397,12 +444,12 @@ def flush_buffer_to_disk():
       Phase 3 (under lock): Register the file path if still recording.
     On disk write failure, prepends data back into the buffer.
     """
-    # Phase 1: snapshot and clear under lock
+    # Phase 1: drain deque and snapshot under lock
     with state.lock:
         if not state.audio_buffer:
             return
         snapshot = list(state.audio_buffer)
-        state.audio_buffer = []
+        state.audio_buffer.clear()
         state.overflow_file_counter += 1
         counter = state.overflow_file_counter
 
@@ -416,7 +463,7 @@ def flush_buffer_to_disk():
         logger.error(f"Failed to flush buffer to disk: {e}")
         # Prepend data back into buffer so nothing is lost
         with state.lock:
-            state.audio_buffer = snapshot + state.audio_buffer
+            state.audio_buffer.extendleft(reversed(snapshot))
         return
 
     # Phase 3: register the file if still recording
@@ -441,10 +488,11 @@ def stop_recording():
     """
     # Snapshot buffer + overflow state, then clear — transcription thread gets its own copies
     buffer_snapshot = list(state.audio_buffer)
+    state.audio_buffer.clear()
     overflow_snapshot = list(state.overflow_files)
     mode_snapshot = state.mode
+    recording_stop_time = time.time()
     start_time_snapshot = state.recording_start_time
-    state.audio_buffer = []
     state.overflow_files = []
     state.overflow_file_counter = 0
     state.recording_start_time = None
@@ -478,6 +526,7 @@ def stop_recording():
             "overflow_files": overflow_snapshot,
             "recording_mode": mode_snapshot,
             "recording_start_time": start_time_snapshot,
+            "recording_stop_time": recording_stop_time,
         },
         daemon=True,
     ).start()
@@ -664,7 +713,7 @@ def post_process(text, context_before, context_after):
     return text
 
 
-def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, recording_start_time=None):
+def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, recording_start_time=None, recording_stop_time=None):
     """
     Transcribe recorded audio using Whisper and type the result.
 
@@ -673,6 +722,7 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         overflow_files: List of Path objects to .npy overflow files (earlier audio, in order)
         recording_mode: "hold" or "toggle" — for stats logging
         recording_start_time: time.time() when recording started — for stats logging
+        recording_stop_time: time.time() when recording stopped — for stats logging
     """
     if overflow_files is None:
         overflow_files = []
@@ -713,15 +763,8 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         context_before, context_after = get_cursor_context()
 
         # Transcribe with Whisper
-        segments, info = state.whisper_model.transcribe(
-            audio_float,
-            language="en",      # English only for faster processing
-            beam_size=5,
-            vad_filter=True,    # Voice Activity Detection filter
-        )
-
-        # Extract text from segments
-        text = "".join(segment.text for segment in segments).strip()
+        processing_start = time.time()
+        text = state.whisper_model(audio_float)
 
         if not text:
             logger.info("No speech detected")
@@ -736,11 +779,13 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
 
         # Insert the text at cursor position
         insert_text(text)
+        processing_sec = time.time() - processing_start
 
         # Log recording analytics
-        rec_duration = (time.time() - recording_start_time) if recording_start_time else duration
+        rec_duration = (recording_stop_time - recording_start_time) if (recording_start_time and recording_stop_time) else duration
         buffer_mb = audio_data.nbytes / (1024 * 1024)
-        log_recording_stats(rec_duration, buffer_mb, recording_mode, len(overflow_files), len(text))
+        logger.info(f"Processing took {processing_sec:.2f}s")
+        log_recording_stats(rec_duration, buffer_mb, recording_mode, len(overflow_files), len(text), processing_sec)
 
     except Exception as e:
         logger.error(f"Transcription error: {e}")
@@ -1129,8 +1174,7 @@ def health_monitor(listener, shutdown_event):
 
         # Flush buffer to disk if it exceeds threshold (crash recovery)
         if state.is_recording:
-            with state.lock:
-                buffer_bytes = sum(c.nbytes for c in state.audio_buffer)
+            buffer_bytes = sum(c.nbytes for c in state.audio_buffer)
             if buffer_bytes / (1024 * 1024) >= FLUSH_BUFFER_THRESHOLD_MB:
                 flush_buffer_to_disk()
 
