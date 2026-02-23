@@ -111,10 +111,11 @@ WHISPER_MODEL = "small"  # Options: tiny, base, small, medium, large
 SAMPLE_RATE = 16000     # Whisper's native sample rate (Hz)
 CHANNELS = 1            # Mono audio
 DTYPE = 'int16'         # Audio data type for sounddevice
-DEBUG = True            # Set to False for minimal console output
+DEBUG = False            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
-MAX_RECORDING_DURATION = 36000  # Maximum recording length in seconds (10 hours - unrealistic safety limit)
+MAX_RECORDING_DURATION = 1800  # Maximum recording length in seconds (30 minutes)
+MAX_BUFFER_SIZE_MB = 500       # Maximum audio buffer size in MB (prevents RAM exhaustion)
 CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
 
 # ============================================================================
@@ -212,6 +213,19 @@ class AppState:
 state = AppState()
 
 
+def get_buffer_size_mb():
+    """
+    Calculate current audio buffer size in megabytes.
+
+    Returns:
+        float: Buffer size in MB
+    """
+    if not state.audio_buffer:
+        return 0.0
+    total_bytes = sum(chunk.nbytes for chunk in state.audio_buffer)
+    return total_bytes / (1024 * 1024)
+
+
 ICON_IDLE = "\U0001f3a4"       # 🎤
 ICON_RECORDING = "\U0001f534"  # 🔴
 
@@ -283,12 +297,35 @@ def audio_callback(indata, frames, time_info, status):
     if state.lock.acquire(blocking=False):
         try:
             if state.is_recording:
-                # Safety limit: stop appending if max duration exceeded
-                max_chunks = int(MAX_RECORDING_DURATION * SAMPLE_RATE / frames) if frames > 0 else float('inf')
-                if len(state.audio_buffer) < max_chunks:
-                    state.audio_buffer.append(indata.copy())
-                else:
-                    logger.warning("Max recording duration reached, stopping buffer append")
+                # Check memory limit before appending
+                buffer_size_mb = get_buffer_size_mb()
+
+                # Warning thresholds
+                if buffer_size_mb >= MAX_BUFFER_SIZE_MB:
+                    # Hard limit reached - stop recording
+                    logger.error(f"Memory limit reached ({buffer_size_mb:.1f}MB/{MAX_BUFFER_SIZE_MB}MB)")
+                    logger.error("Auto-stopping recording to protect system resources")
+                    # Schedule stop on main thread (can't call stop_recording here due to lock)
+                    state.is_recording = False
+                    _cleanup_stream()
+                    return
+                elif buffer_size_mb >= MAX_BUFFER_SIZE_MB * 0.9:
+                    # 90% threshold - critical warning
+                    logger.warning(f"Memory warning: Buffer at {buffer_size_mb:.1f}MB/{MAX_BUFFER_SIZE_MB}MB (90%)")
+                elif buffer_size_mb >= MAX_BUFFER_SIZE_MB * 0.75 and len(state.audio_buffer) % 100 == 0:
+                    # 75% threshold - log occasionally (every 100 chunks to avoid spam)
+                    logger.info(f"Buffer size: {buffer_size_mb:.1f}MB/{MAX_BUFFER_SIZE_MB}MB (75%)")
+
+                # Also check duration limit
+                duration = len(state.audio_buffer) * frames / SAMPLE_RATE if frames > 0 else 0
+                if duration >= MAX_RECORDING_DURATION:
+                    logger.warning(f"Max recording duration reached ({duration:.1f}s), auto-stopping")
+                    state.is_recording = False
+                    _cleanup_stream()
+                    return
+
+                # Append chunk if all checks pass
+                state.audio_buffer.append(indata.copy())
         finally:
             state.lock.release()
 
@@ -357,7 +394,15 @@ def stop_recording():
         logger.debug("Recording stopped - empty buffer, skipping transcription")
         return
 
-    logger.debug(f"Recording stopped - Buffer size: {len(buffer_snapshot)} chunks")
+    # Calculate buffer statistics
+    total_bytes = sum(chunk.nbytes for chunk in buffer_snapshot)
+    buffer_size_mb = total_bytes / (1024 * 1024)
+
+    # Estimate duration (chunks may vary in size, so calculate from total samples)
+    total_samples = sum(len(chunk) for chunk in buffer_snapshot)
+    duration_sec = total_samples / SAMPLE_RATE
+
+    logger.debug(f"Recording stopped - Buffer: {buffer_size_mb:.1f}MB ({len(buffer_snapshot)} chunks, {duration_sec:.1f}s)")
 
     # Transcription in separate thread — owns buffer_snapshot, no shared state
     threading.Thread(target=transcribe_and_type, args=(buffer_snapshot,), daemon=True).start()
@@ -919,7 +964,7 @@ def setup_menu_bar(shutdown_event):
 
     # Retype Last — grayed out when no transcription available
     retype_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Retype Last", "retypeLast:", ""
+        "Retype last transcript", "retypeLast:", ""
     )
     retype_item.setTarget_(delegate)
     menu.addItem_(retype_item)
