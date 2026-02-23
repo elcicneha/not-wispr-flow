@@ -206,6 +206,7 @@ class AppState:
 
         # Transcription state tracking
         self.is_transcribing = False     # True when transcription thread is running
+        self.transcription_start_time = None  # When transcription started (for hang detection)
 
         # Debouncing
         self.last_press_time = 0
@@ -391,14 +392,28 @@ def start_recording():
 
 
 def _cleanup_stream():
-    """Safely close the audio stream. Idempotent — safe to call anytime."""
+    """Safely close the audio stream with timeout. Idempotent — safe to call anytime.
+
+    Uses a background thread with 2s timeout to prevent stream.stop()/close()
+    from hanging and deadlocking the main lock (which blocks all key events).
+    """
     if state.audio_stream is not None:
-        try:
-            state.audio_stream.stop()
-            state.audio_stream.close()
-        except Exception:
-            pass
-        state.audio_stream = None
+        stream = state.audio_stream
+        state.audio_stream = None  # Clear reference immediately so state is clean
+
+        def _close():
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_close, daemon=True)
+        t.start()
+        t.join(timeout=2.0)
+        if t.is_alive():
+            if logger:
+                logger.warning("Audio stream cleanup timed out (2s) — continuing anyway")
 
 
 def cleanup_stale_overflow_files():
@@ -516,6 +531,7 @@ def stop_recording():
 
     # Set transcription flag and update UI before spawning thread
     state.is_transcribing = True
+    state.transcription_start_time = time.time()
     _update_menu_icon('transcribing')  # Show ⏳ icon
 
     # Transcription in separate thread — wrapper ensures cleanup
@@ -542,6 +558,7 @@ def _transcription_wrapper(audio_buffer, **kwargs):
         transcribe_and_type(audio_buffer, **kwargs)
     finally:
         state.is_transcribing = False
+        state.transcription_start_time = None
         _update_menu_icon('idle')  # Reset to 🎤 icon
 
 
@@ -817,6 +834,11 @@ def on_press(key):
       mode=hold   + space               → convert to toggle mode (keep recording)
       mode=hold   + hotkey              → missed release recovery, stop recording
       mode=toggle + hotkey              → stop recording, mode=None
+
+    Stuck state recovery (before normal transitions):
+      mode set + not recording + has data → salvage partial recording, reset
+      mode set + not recording + no data  → reset to idle, then start new recording
+      transcription hung (>60s)           → clear flag so user can record again
     """
     # if DEBUG:
     #     logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
@@ -833,6 +855,39 @@ def on_press(key):
                 state.last_press_time = current_time
                 state.hotkey_pressed = True
 
+                # --- Stuck state recovery ---
+                # Detect mode/recording desync (mode set but not recording)
+                if state.mode is not None and not state.is_recording:
+                    has_data = bool(state.audio_buffer or state.overflow_files)
+                    if has_data:
+                        # Stream crashed mid-recording but buffer has audio.
+                        # Salvage: transcribe what we captured, then reset.
+                        logger.warning(f"Stuck recovery: mode={state.mode}, not recording, buffer has data. Salvaging partial recording...")
+                        try:
+                            stop_recording()
+                        finally:
+                            state.mode = None
+                        return  # User presses again to start fresh
+                    else:
+                        # Recording never actually started (or buffer empty).
+                        # Safe to reset — fall through to start a new recording.
+                        logger.warning(f"Stuck recovery: mode={state.mode}, not recording, no data. Resetting to idle.")
+                        _cleanup_stream()
+                        state.mode = None
+                        _update_menu_icon('idle')
+                        # Fall through to state.mode is None → start new recording
+
+                # Detect hung transcription (>60s) blocking the UI
+                if state.mode is None and not state.is_recording and state.is_transcribing:
+                    if state.transcription_start_time and (time.time() - state.transcription_start_time > 60):
+                        logger.warning(f"Stuck recovery: transcription hung for >{time.time() - state.transcription_start_time:.0f}s. Clearing flag.")
+                        state.is_transcribing = False
+                        state.transcription_start_time = None
+                        _update_menu_icon('idle')
+                    # Note: even with is_transcribing=True, user CAN start a new
+                    # recording (transcription runs in its own thread). Fall through.
+
+                # --- Normal state machine ---
                 if state.mode is None:
                     # Start recording — toggle if space already held, else hold
                     state.mode = "toggle" if state.space_pressed else "hold"
@@ -845,16 +900,20 @@ def on_press(key):
                     logger.info(f"{state.mode.capitalize()} mode: Recording started")
 
                 elif state.mode == "toggle" and state.is_recording:
-                    stop_recording()
-                    state.mode = None
+                    try:
+                        stop_recording()
+                    finally:
+                        state.mode = None
                     logger.info("Toggle mode: Recording stopped")
 
                 elif state.mode == "hold" and state.is_recording:
                     # Hotkey pressed while in hold mode — release event was missed.
                     # Stop recording and reset so the user can start fresh.
                     logger.warning("Hold mode: Hotkey pressed again (missed release?), stopping recording")
-                    stop_recording()
-                    state.mode = None
+                    try:
+                        stop_recording()
+                    finally:
+                        state.mode = None
 
             elif key == TOGGLE_KEY:
                 state.space_pressed = True
@@ -886,6 +945,9 @@ def on_release(key):
     State machine transitions on release:
       mode=hold + hotkey released → stop recording, mode=None
       (toggle mode ignores hotkey release — stop happens on next hotkey press)
+
+    Stuck state recovery:
+      mode=hold + not recording → reset mode to None (stream crashed)
     """
     # if DEBUG:
     #     logger.debug(f"Key release: {key!r} (type={type(key).__name__})")
@@ -896,9 +958,27 @@ def on_release(key):
                 state.hotkey_pressed = False
 
                 if state.mode == "hold" and state.is_recording:
-                    stop_recording()
-                    state.mode = None
+                    try:
+                        stop_recording()
+                    finally:
+                        state.mode = None
                     logger.info("Hold mode: Recording stopped")
+
+                elif state.mode == "hold" and not state.is_recording:
+                    # Stuck: hold mode but not recording (stream died).
+                    # Salvage any data, then reset.
+                    has_data = bool(state.audio_buffer or state.overflow_files)
+                    if has_data:
+                        logger.warning("Stuck recovery (release): mode=hold, not recording, salvaging data.")
+                        try:
+                            stop_recording()
+                        finally:
+                            state.mode = None
+                    else:
+                        logger.warning("Stuck recovery (release): mode=hold, not recording, no data. Resetting.")
+                        _cleanup_stream()
+                        state.mode = None
+                        _update_menu_icon('idle')
 
             elif key == TOGGLE_KEY:
                 state.space_pressed = False
@@ -1166,11 +1246,30 @@ def setup_menu_bar(shutdown_event):
 
 
 def health_monitor(listener, shutdown_event):
-    """Background thread: monitors listener health and flushes buffer to disk when threshold exceeded."""
+    """Background thread: monitors listener health, detects dead audio streams, and flushes buffer to disk."""
     while not shutdown_event.is_set():
         if not listener.is_alive():
             NSApplication.sharedApplication().terminate_(None)
             return
+
+        # Check audio stream health during recording.
+        # If the stream died, salvage any captured audio and reset to idle.
+        # This catches stream crashes within ~5s so the user isn't left
+        # talking into nothing for minutes.
+        with state.lock:
+            if state.is_recording and state.audio_stream is not None:
+                try:
+                    stream_alive = state.audio_stream.active
+                except Exception:
+                    stream_alive = False
+
+                if not stream_alive:
+                    has_data = bool(state.audio_buffer or state.overflow_files)
+                    logger.warning(f"Health monitor: Audio stream died during recording (has data: {has_data}). Auto-recovering.")
+                    try:
+                        stop_recording()  # Will transcribe partial data if any
+                    finally:
+                        state.mode = None
 
         # Flush buffer to disk if it exceeds threshold (crash recovery)
         if state.is_recording:
