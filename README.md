@@ -1,195 +1,176 @@
 # Not Wispr Flow
 
+# Not Wispr Flow
+
 A free, offline voice-to-text tool for **macOS**. Hold a key, speak, release — your words get typed wherever your cursor is. Works in any app.
 
 Everything runs locally on your machine. No cloud, no subscription, no data leaving your computer. It uses OpenAI's Whisper model through Apple's MLX framework, so transcription happens on your Mac's GPU.
 
-> **This is a macOS-only app.** It relies on macOS-specific system APIs (Accessibility, AppKit, etc.) and Apple's MLX framework for GPU acceleration. It will not run on Windows or Linux.
+**Requirements:** Mac with Apple Silicon (M1/M2/M3/M4) • ~1-3GB RAM based on the model you choose.
 
 ---
 
 ## About this project
 
-This was inspired by [Wispr Flow](https://wisprflow.ai/). I genuinely admire what they've built. This project doesn't come close to the level of quality and features they offer. But this gets the job done for free and runs entirely on your own machine. The tradeoff is it uses some of your RAM (~2-3GB) since the AI model sits in memory while the app is running.
+This was inspired by [Wispr Flow](https://wisprflow.ai/). I genuinely admire what they've built, the product is commendable. This project doesn't come close to the level of quality and features they offer. 
+
+But this gets the job done for free and runs entirely on your own machine. The tradeoff is it uses some of your RAM (~2-3GB) since the AI model sits in memory while the app is running.
 
 ---
 
-## Quick start
+## Setup
 
-You need a Mac with Apple Silicon (M1/M2/M3/M4).
+**Step 1: Install Homebrew** (skip if you already have it)
 
-### Setting up your Mac (skip what you already have)
-
-**Install Homebrew** (a package manager for macOS — think of it as an app store for developer tools):
-
-Open the Terminal app (search "Terminal" in Spotlight) and paste:
+Open Terminal (search "Terminal" in Spotlight) and paste:
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
-Follow the on-screen instructions. When it's done, close and reopen Terminal.
+Follow the instructions, then close and reopen Terminal.
 
-**Install Python and Git:**
+**Step 2: Install required software**
 ```bash
 brew install python git portaudio
 ```
-This installs Python (the programming language this app is written in), Git (to download the code), and PortAudio (needed for microphone access).
 
-### Installing the app
+**Step 3: Download the code**
 
-**Optional:** If you want the code in a specific folder (e.g. Documents, Desktop), open that folder in Finder, right-click on it, and select **"New Terminal at Folder"**. Otherwise, just open Terminal — the code will be downloaded to your home directory by default.
+Want the code in a specific folder (like Documents or Desktop)? Open that folder in Finder, right-click on the folder, and select **New Terminal at Folder**. Otherwise, just use the Terminal you already have open.
 
-Then paste these commands:
-
+Then paste:
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/elcicneha/not-wispr-flow.git
 cd not-wispr-flow
+```
+
+**Step 4: Set up the environment**
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Running it
+Done! Now pick how you want to run it:
 
+---
+
+## Pick one: Terminal or Mac App
+
+### A) Terminal Method (Simpler setup, but you run commands each time)
+
+**Every time you want to use the app:**
+
+1. Open Terminal at the folder where you have the code. Or if you have the code in the default folder, just open Terminal and paste:
+```bash
+cd ~/not-wispr-flow
+```
+2. Paste these commands:
 ```bash
 source venv/bin/activate
 python3 main.py
 ```
+3. Keep Terminal open while using the app
+4. When done, press `Ctrl+C` in Terminal to stop
 
-The first run downloads the Whisper model (~1.6GB). After that, startup takes a few seconds.
-
-**Every time you want to use it**, open Terminal and run those two lines (`source venv/bin/activate` then `python3 main.py`). Or set it up as a background service (see the technical section below).
-
-### Grant macOS permissions
-
-macOS will prompt you — say yes to all of them. If it doesn't prompt, go to **System Settings > Privacy & Security** and manually enable these for Terminal (or whatever app you ran the command from):
-
-- **Microphone** — so it can hear you
-- **Accessibility** — so it can type text into other apps
-- **Input Monitoring** — so it can detect the hotkey
-
-If any of these are missing, things will silently not work. This is the #1 issue people run into.
+**Grant permissions (first time only):** System Settings → Privacy & Security → Enable these for **Terminal**: Microphone, Accessibility, Input Monitoring
 
 ---
 
-## How to use it
+### B) Mac App Method (One-time setup, then launch like any app)
 
-Once it's running, click into any app where you want text to appear.
+**Step 1: Create certificate (one-time)**
 
-**Press-and-hold** (for quick dictation):
-1. Hold **Right Control**
-2. Speak
-3. Release **Right Control**
-4. Text appears at your cursor
+**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. This creates a local certificate so permissions persist. The certificate never leaves your computer.
 
-**Toggle mode** (for longer, hands-free dictation):
-1. Press **Right Control + Space** together to start recording
-2. Speak as long as you want
-3. Press **Right Control** again to stop
-4. Text appears at your cursor
+**Important:** The install script requires this certificate. If you skip this step, the installation will fail.
 
-To quit, press `Ctrl+C` in the terminal.
+**Not comfortable with this?** Use Option A instead — no certificate needed.
+
+Paste this into Terminal. You'll be asked for your Mac password a few times:
+```bash
+cat > /tmp/create_cert.sh << 'EOF'
+#!/bin/bash
+CERT_NAME="Not Wispr Flow Dev"
+cat > /tmp/cert_config.conf <<CONF
+[ req ]
+default_bits = 2048
+distinguished_name = req_distinguished_name
+x509_extensions = v3_ca
+[ req_distinguished_name ]
+commonName = $CERT_NAME
+[ v3_ca ]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign,digitalSignature
+CONF
+openssl req -new -newkey rsa:2048 -x509 -days 3650 -nodes \
+  -out /tmp/cert.pem -keyout /tmp/key.pem \
+  -config /tmp/cert_config.conf -subj "/CN=$CERT_NAME"
+openssl pkcs12 -export -out /tmp/cert.p12 \
+  -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:
+security import /tmp/cert.p12 -k ~/Library/Keychains/login.keychain-db \
+  -T /usr/bin/codesign -T /usr/bin/security
+rm -f /tmp/cert.pem /tmp/key.pem /tmp/cert.p12 /tmp/cert_config.conf
+echo "Certificate created!"
+EOF
+chmod +x /tmp/create_cert.sh && /tmp/create_cert.sh
+```
+
+**Step 2: Install the app**
+```bash
+cd ~/not-wispr-flow
+./scripts/install_service.sh
+```
+This takes a minute or two.
+
+**Step 3: Launch the app**
+
+Open "Not Wispr Flow" from Spotlight or your Applications folder. You'll see the icon in your menu bar (top-right).
+
+**Step 4: Grant permissions (first time only)**
+
+System Settings → Privacy & Security → Enable these for **"Not Wispr Flow"**: Microphone, Accessibility, Input Monitoring
+
+**To stop the app:** Click the menu bar icon → Quit
+
+**To uninstall:**
+```bash
+cd ~/not-wispr-flow
+./scripts/uninstall_service.sh
+```
+
+---
+
+## How to use
+
+* **Hold mode:** Hold Control key → speak → release
+* **Toggle mode:** Press Control + Space → speak → press Control again
 
 ---
 
 ## Troubleshooting
 
-**Nothing happens when I press the hotkey** — Almost always a permissions issue. Double-check all three permissions (Microphone, Accessibility, Input Monitoring) in System Settings > Privacy & Security.
-
-**I speak but no text appears** — Accessibility permission is probably missing.
-
-**"Audio too short, skipping"** — You released the key too quickly. Hold it longer.
-
-**Transcription is slow** — Try a smaller model (see the customization section below).
-
-**Logs** — Check `~/Library/Logs/NotWisprFlow/notwisprflow.log` if something seems off.
+| Problem | Fix |
+|---------|-----|
+| Hotkey doesn't work | Check permissions (all 3 must be enabled) |
+| No text appears | Enable Accessibility permission |
+| Logs | `~/Library/Logs/NotWisprFlow/notwisprflow.log` |
 
 ---
 
-## A note about Wispr Flow
+## Customization
 
-Seriously, go check out [Wispr Flow](https://wisprflow.ai). It's a great product. If you want something that just works out of the box with a clean UI and you don't mind paying for it, use that instead. This project exists for people who want a free, local alternative and don't mind a little terminal work.
-
----
-
-# Technical details
-
-Everything below is for folks who want to customize, understand, or contribute to the project.
-
-## Changing the Whisper model
-
-Open [main.py](main.py) and find this line near the top (line 112):
-
-```python
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
-```
-
-Replace it with any mlx-whisper compatible model from [HuggingFace's mlx-community](https://huggingface.co/mlx-community). Some options:
-
-| Model | Download size | RAM usage | Tradeoff |
-|-------|--------------|-----------|----------|
-| `mlx-community/whisper-tiny` | ~75MB | ~1GB | Fastest, least accurate |
-| `mlx-community/whisper-base` | ~150MB | ~1GB | Quick and decent |
-| `mlx-community/whisper-small` | ~500MB | ~1.5GB | Good middle ground |
-| `mlx-community/whisper-large-v3-turbo` | ~1.6GB | ~2.5GB | **Default** — best speed/accuracy tradeoff |
-| `mlx-community/whisper-large-v3` | ~3GB | ~4GB | Most accurate, slower |
-
-Restart the app after changing the model. It'll download the new one on first run.
-
-## Changing the hotkey
-
-If your keyboard doesn't have Right Control or you want a different trigger, find this line (line 137):
-
-```python
-HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}
-```
-
-Some alternatives:
-```python
-HOTKEY_KEYS = {Key.cmd_r}              # Right Command
-HOTKEY_KEYS = {Key.alt_r, Key.alt}     # Right Option
-HOTKEY_KEYS = {Key.f13}                # F13 key
-```
-
-## How it works
-
-1. A keyboard listener (pynput) watches for the hotkey press/release
-2. While the key is held, audio is captured from your microphone (sounddevice)
-3. On release, the audio buffer is passed to mlx-whisper for transcription on the GPU
-4. The transcribed text is typed at the cursor position using macOS Accessibility APIs
-
-The whole app is a single Python file ([main.py](main.py)). The menu bar icon runs through macOS's AppKit via PyObjC.
-
-## Running as a background service
-
-If you don't want to keep a terminal window open:
-
+Edit [config.py](config.py) to change the Whisper model or hotkeys, then rebuild:
 ```bash
-# Install as a macOS LaunchAgent (auto-starts on login)
-./scripts/install_service.sh
-
-# Check if it's running
-./scripts/check_status.sh
-
-# Uninstall
-./scripts/uninstall_service.sh
+./scripts/install_service.sh  # if using Mac App
+# or just restart if using Terminal method
 ```
 
-## Project structure
+**Available options:**
+- **Whisper models:** `whisper-large-v3-turbo` (default), `whisper-small`, `whisper-base`
+- **Hotkeys:** Control key (default), Function key (`{Key.f13}`), Command key (`{Key.cmd, Key.cmd_r}`), Option key (`{Key.alt, Key.alt_r}`), F13, etc.
 
-```
-main.py                  — The entire app (single file)
-requirements.txt         — Python dependencies
-setup.py                 — py2app config for building a .app bundle
-scripts/
-  install_service.sh     — Build, sign, and install to /Applications
-  uninstall_service.sh   — Remove the app and LaunchAgent
-  check_status.sh        — Show whether the service is running
-```
+> **Note:** I'm planning to add a GUI for hotkey configuration in the future. For now, editing the config file is the only way to change hotkeys.
 
-## Acknowledgments
+---
 
-- [Wispr Flow](https://wisprflow.ai) — the inspiration
-- [OpenAI Whisper](https://github.com/openai/whisper) — the model that makes this possible
-- [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) — GPU-accelerated Whisper for Apple Silicon
-- [pynput](https://github.com/moses-palmer/pynput) — keyboard monitoring
-- [sounddevice](https://python-sounddevice.readthedocs.io/) — audio capture
+Inspired by [Wispr Flow](https://wisprflow.ai) • Uses [OpenAI Whisper](https://github.com/openai/whisper) via [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper)
