@@ -32,6 +32,9 @@ ENV/
 *.mp3
 *.flac
 
+# Recording stats
+recording_stats.jsonl
+
 # py2app build artifacts
 build/
 dist/

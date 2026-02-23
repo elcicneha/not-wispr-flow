@@ -25,6 +25,7 @@ import os
 import signal
 import atexit
 import subprocess
+import json
 import objc
 from ApplicationServices import (
     AXUIElementCreateSystemWide,
@@ -114,8 +115,7 @@ DTYPE = 'int16'         # Audio data type for sounddevice
 DEBUG = False            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
-MAX_RECORDING_DURATION = 1800  # Maximum recording length in seconds (30 minutes)
-MAX_BUFFER_SIZE_MB = 500       # Maximum audio buffer size in MB (prevents RAM exhaustion)
+FLUSH_BUFFER_THRESHOLD_MB = 10  # Flush buffer to disk when it exceeds this (~5 min of audio, crash recovery)
 CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
 
 # ============================================================================
@@ -153,8 +153,8 @@ def validate_config():
         errors.append(f"DEBOUNCE_MS must be >= 0, got {DEBOUNCE_MS}")
     if MIN_RECORDING_DURATION <= 0:
         errors.append(f"MIN_RECORDING_DURATION must be > 0, got {MIN_RECORDING_DURATION}")
-    if MAX_RECORDING_DURATION <= MIN_RECORDING_DURATION:
-        errors.append(f"MAX_RECORDING_DURATION ({MAX_RECORDING_DURATION}) must be > MIN_RECORDING_DURATION ({MIN_RECORDING_DURATION})")
+    if FLUSH_BUFFER_THRESHOLD_MB < 1:
+        errors.append(f"FLUSH_BUFFER_THRESHOLD_MB must be >= 1, got {FLUSH_BUFFER_THRESHOLD_MB}")
     if SAMPLE_RATE <= 0:
         errors.append(f"SAMPLE_RATE must be > 0, got {SAMPLE_RATE}")
     if WHISPER_MODEL not in ("tiny", "base", "small", "medium", "large"):
@@ -208,22 +208,14 @@ class AppState:
         # Menu bar button reference (set by setup_menu_bar)
         self.status_button = None
 
+        # Buffer overflow to disk
+        self.overflow_files = []        # Paths to flushed .npy temp files for current recording
+        self.overflow_file_counter = 0  # Unique filename counter per recording
+        self.recording_start_time = None  # For stats tracking
+
 
 # Global state instance
 state = AppState()
-
-
-def get_buffer_size_mb():
-    """
-    Calculate current audio buffer size in megabytes.
-
-    Returns:
-        float: Buffer size in MB
-    """
-    if not state.audio_buffer:
-        return 0.0
-    total_bytes = sum(chunk.nbytes for chunk in state.audio_buffer)
-    return total_bytes / (1024 * 1024)
 
 
 ICON_IDLE = "\U0001f3a4"       # 🎤
@@ -293,38 +285,9 @@ def audio_callback(indata, frames, time_info, status):
     if status:
         logger.warning(f"Audio callback status: {status}")
 
-    # Use non-blocking lock to avoid audio glitches
     if state.lock.acquire(blocking=False):
         try:
             if state.is_recording:
-                # Check memory limit before appending
-                buffer_size_mb = get_buffer_size_mb()
-
-                # Warning thresholds
-                if buffer_size_mb >= MAX_BUFFER_SIZE_MB:
-                    # Hard limit reached - stop recording
-                    logger.error(f"Memory limit reached ({buffer_size_mb:.1f}MB/{MAX_BUFFER_SIZE_MB}MB)")
-                    logger.error("Auto-stopping recording to protect system resources")
-                    # Schedule stop on main thread (can't call stop_recording here due to lock)
-                    state.is_recording = False
-                    _cleanup_stream()
-                    return
-                elif buffer_size_mb >= MAX_BUFFER_SIZE_MB * 0.9:
-                    # 90% threshold - critical warning
-                    logger.warning(f"Memory warning: Buffer at {buffer_size_mb:.1f}MB/{MAX_BUFFER_SIZE_MB}MB (90%)")
-                elif buffer_size_mb >= MAX_BUFFER_SIZE_MB * 0.75 and len(state.audio_buffer) % 100 == 0:
-                    # 75% threshold - log occasionally (every 100 chunks to avoid spam)
-                    logger.info(f"Buffer size: {buffer_size_mb:.1f}MB/{MAX_BUFFER_SIZE_MB}MB (75%)")
-
-                # Also check duration limit
-                duration = len(state.audio_buffer) * frames / SAMPLE_RATE if frames > 0 else 0
-                if duration >= MAX_RECORDING_DURATION:
-                    logger.warning(f"Max recording duration reached ({duration:.1f}s), auto-stopping")
-                    state.is_recording = False
-                    _cleanup_stream()
-                    return
-
-                # Append chunk if all checks pass
                 state.audio_buffer.append(indata.copy())
         finally:
             state.lock.release()
@@ -343,6 +306,9 @@ def start_recording():
     _cleanup_stream()
 
     state.audio_buffer = []
+    state.overflow_files = []
+    state.overflow_file_counter = 0
+    state.recording_start_time = time.time()
     state.is_recording = False
 
     try:
@@ -375,6 +341,82 @@ def _cleanup_stream():
         state.audio_stream = None
 
 
+def cleanup_stale_overflow_files():
+    """Delete leftover overflow .npy files from previous crashes. Called once at startup."""
+    try:
+        stale = list(OVERFLOW_DIR.glob(f"{OVERFLOW_PREFIX}*.npy"))
+        for f in stale:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        if stale:
+            logger.info(f"Cleaned up {len(stale)} stale overflow file(s)")
+    except Exception as e:
+        logger.warning(f"Failed to clean stale overflow files: {e}")
+
+
+def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcription_chars):
+    """Append one JSON line of recording analytics to STATS_FILE."""
+    try:
+        entry = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "duration_sec": round(duration_sec, 2),
+            "buffer_mb": round(buffer_mb, 2),
+            "mode": mode,
+            "overflow_files": overflow_count,
+            "transcription_chars": transcription_chars,
+        }
+        with open(STATS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        logger.warning(f"Failed to log recording stats: {e}")
+
+
+def flush_buffer_to_disk():
+    """
+    Flush the in-memory audio buffer to a .npy file on disk.
+
+    Thread-safe two-phase design:
+      Phase 1 (under lock): Snapshot buffer, clear it, increment counter.
+      Phase 2 (no lock): Concatenate and write to disk.
+      Phase 3 (under lock): Register the file path if still recording.
+    On disk write failure, prepends data back into the buffer.
+    """
+    # Phase 1: snapshot and clear under lock
+    with state.lock:
+        if not state.audio_buffer:
+            return
+        snapshot = list(state.audio_buffer)
+        state.audio_buffer = []
+        state.overflow_file_counter += 1
+        counter = state.overflow_file_counter
+
+    # Phase 2: write to disk without holding the lock
+    overflow_path = OVERFLOW_DIR / f"{OVERFLOW_PREFIX}{os.getpid()}_{counter}.npy"
+    try:
+        audio_data = np.concatenate(snapshot, axis=0)
+        np.save(overflow_path, audio_data)
+        logger.debug(f"Flushed buffer to disk: {overflow_path} ({audio_data.nbytes / (1024*1024):.1f}MB)")
+    except Exception as e:
+        logger.error(f"Failed to flush buffer to disk: {e}")
+        # Prepend data back into buffer so nothing is lost
+        with state.lock:
+            state.audio_buffer = snapshot + state.audio_buffer
+        return
+
+    # Phase 3: register the file if still recording
+    with state.lock:
+        if state.is_recording:
+            state.overflow_files.append(overflow_path)
+        else:
+            # Recording ended during flush — clean up orphaned file
+            try:
+                overflow_path.unlink()
+            except OSError:
+                pass
+
+
 def stop_recording():
     """
     Stop audio recording and trigger transcription.
@@ -383,18 +425,24 @@ def stop_recording():
     Idempotent: safe to call even if not currently recording.
     Snapshots the buffer before cleanup so transcription thread owns its data.
     """
-    # Snapshot buffer, then clear — transcription thread gets its own copy
+    # Snapshot buffer + overflow state, then clear — transcription thread gets its own copies
     buffer_snapshot = list(state.audio_buffer)
+    overflow_snapshot = list(state.overflow_files)
+    mode_snapshot = state.mode
+    start_time_snapshot = state.recording_start_time
     state.audio_buffer = []
+    state.overflow_files = []
+    state.overflow_file_counter = 0
+    state.recording_start_time = None
     state.is_recording = False
     _cleanup_stream()
     _update_menu_icon(False)
 
-    if not buffer_snapshot:
+    if not buffer_snapshot and not overflow_snapshot:
         logger.debug("Recording stopped - empty buffer, skipping transcription")
         return
 
-    # Calculate buffer statistics
+    # Calculate buffer statistics (in-memory portion only)
     total_bytes = sum(chunk.nbytes for chunk in buffer_snapshot)
     buffer_size_mb = total_bytes / (1024 * 1024)
 
@@ -402,10 +450,19 @@ def stop_recording():
     total_samples = sum(len(chunk) for chunk in buffer_snapshot)
     duration_sec = total_samples / SAMPLE_RATE
 
-    logger.debug(f"Recording stopped - Buffer: {buffer_size_mb:.1f}MB ({len(buffer_snapshot)} chunks, {duration_sec:.1f}s)")
+    logger.debug(f"Recording stopped - Buffer: {buffer_size_mb:.1f}MB ({len(buffer_snapshot)} chunks, {duration_sec:.1f}s), overflow files: {len(overflow_snapshot)}")
 
-    # Transcription in separate thread — owns buffer_snapshot, no shared state
-    threading.Thread(target=transcribe_and_type, args=(buffer_snapshot,), daemon=True).start()
+    # Transcription in separate thread — owns buffer_snapshot + overflow_snapshot, no shared state
+    threading.Thread(
+        target=transcribe_and_type,
+        args=(buffer_snapshot,),
+        kwargs={
+            "overflow_files": overflow_snapshot,
+            "recording_mode": mode_snapshot,
+            "recording_start_time": start_time_snapshot,
+        },
+        daemon=True,
+    ).start()
 
 
 # ============================================================================
@@ -574,21 +631,38 @@ def post_process(text, context_before, context_after):
     return text
 
 
-def transcribe_and_type(audio_buffer):
+def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, recording_start_time=None):
     """
     Transcribe recorded audio using Whisper and type the result.
 
     Args:
-        audio_buffer: List of numpy arrays containing recorded audio chunks
+        audio_buffer: List of numpy arrays containing recorded audio chunks (in-memory tail)
+        overflow_files: List of Path objects to .npy overflow files (earlier audio, in order)
+        recording_mode: "hold" or "toggle" — for stats logging
+        recording_start_time: time.time() when recording started — for stats logging
     """
+    if overflow_files is None:
+        overflow_files = []
+
     try:
-        # Check if buffer has data
-        if not audio_buffer or len(audio_buffer) == 0:
+        # Load overflow files first (earlier audio), then append in-memory buffer
+        all_chunks = []
+        for fpath in overflow_files:
+            try:
+                chunk = np.load(fpath)
+                all_chunks.append(chunk)
+            except Exception as e:
+                logger.error(f"Failed to load overflow file {fpath}: {e}")
+                # Continue — partial transcription is better than nothing
+
+        all_chunks.extend(audio_buffer)
+
+        if not all_chunks:
             logger.warning("No audio recorded")
             return
 
         # Combine all audio chunks into single array
-        audio_data = np.concatenate(audio_buffer, axis=0)
+        audio_data = np.concatenate(all_chunks, axis=0)
 
         # Convert from int16 to float32 and normalize to [-1.0, 1.0]
         audio_float = audio_data.astype(np.float32) / 32768.0
@@ -630,11 +704,24 @@ def transcribe_and_type(audio_buffer):
         # Insert the text at cursor position
         insert_text(text)
 
+        # Log recording analytics
+        rec_duration = (time.time() - recording_start_time) if recording_start_time else duration
+        buffer_mb = audio_data.nbytes / (1024 * 1024)
+        log_recording_stats(rec_duration, buffer_mb, recording_mode, len(overflow_files), len(text))
+
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         if DEBUG:
             import traceback
             traceback.print_exc()
+    finally:
+        # Clean up overflow files
+        for fpath in overflow_files:
+            try:
+                if fpath.exists():
+                    fpath.unlink()
+            except OSError:
+                pass
 
 
 # ============================================================================
@@ -884,6 +971,9 @@ def check_accessibility_permission():
 # ============================================================================
 
 PID_FILE = Path.home() / 'Library' / 'Logs' / 'Whispr' / 'whispr.pid'
+OVERFLOW_DIR = Path.home() / 'Library' / 'Logs' / 'Whispr'  # Reuses log dir (already 0o700)
+OVERFLOW_PREFIX = "whispr_overflow_"
+STATS_FILE = Path(__file__).resolve().parent / 'recording_stats.jsonl'
 
 
 def acquire_pid_lock():
@@ -996,10 +1086,21 @@ def setup_menu_bar(shutdown_event):
 
 
 def health_monitor(listener, shutdown_event):
-    """Background thread: monitors listener health."""
-    while listener.is_alive() and not shutdown_event.is_set():
-        listener.join(timeout=5)
-    # If listener died or shutdown requested, terminate the app
+    """Background thread: monitors listener health and flushes buffer to disk when threshold exceeded."""
+    while not shutdown_event.is_set():
+        if not listener.is_alive():
+            NSApplication.sharedApplication().terminate_(None)
+            return
+
+        # Flush buffer to disk if it exceeds threshold (crash recovery)
+        if state.is_recording:
+            with state.lock:
+                buffer_bytes = sum(c.nbytes for c in state.audio_buffer)
+            if buffer_bytes / (1024 * 1024) >= FLUSH_BUFFER_THRESHOLD_MB:
+                flush_buffer_to_disk()
+
+        shutdown_event.wait(timeout=5)
+
     NSApplication.sharedApplication().terminate_(None)
 
 
@@ -1018,6 +1119,9 @@ def main():
 
     # Setup logging first
     logger = setup_logging()
+
+    # Clean up overflow files from previous crashes
+    cleanup_stale_overflow_files()
 
     # Prevent duplicate instances
     pid_lock = acquire_pid_lock()
@@ -1082,6 +1186,14 @@ def main():
             else:
                 _cleanup_stream()
             state.mode = None
+            # Clean up any remaining overflow files
+            for fpath in state.overflow_files:
+                try:
+                    if fpath.exists():
+                        fpath.unlink()
+                except OSError:
+                    pass
+            state.overflow_files = []
         logger.info("Goodbye!")
 
     atexit.register(cleanup)
