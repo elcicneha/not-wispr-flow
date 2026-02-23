@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Not Wispr Flow is a macOS voice dictation tool providing offline, system-wide speech-to-text using mlx-whisper. It runs as a background app with a menu bar icon and supports two recording modes:
+Not Wispr Flow is a macOS voice dictation tool providing offline, system-wide speech-to-text using mlx-whisper with Silero VAD for silence detection. It runs as a background app with a menu bar icon and supports two recording modes:
 
 - **Press-and-Hold**: Hold Right Control to record, release to transcribe
 - **Toggle Mode**: Press Right Control + Space to start recording, Right Control to stop
@@ -42,12 +42,13 @@ There are no automated tests. Manual testing requires running the app and dictat
 All application logic is in `main.py` (~810 lines). This is intentional.
 
 ### Key Components
-1. **`AppState`** — Global state: recording mode, audio buffer, key states, thread lock
-2. **Audio Pipeline** — `sounddevice.InputStream` → numpy buffer → `mlx-whisper` → `pynput.keyboard.Controller.type()`
-3. **Keyboard Handling** — `pynput.Listener` with `on_press`/`on_release` callbacks implementing a state machine
-4. **Menu Bar** — `NSStatusBar` icon with Quit menu item via PyObjC (`MenuDelegate` + `setup_menu_bar()`)
-5. **Main Loop** — `NSApplication.sharedApplication().run()` on main thread (required for macOS event loop)
-6. **Health Monitor** — Background thread detecting stuck keys (>60s) and dead listener
+1. **`AppState`** — Global state: recording mode, audio buffer, VAD model, key states, thread lock
+2. **Audio Pipeline** — `sounddevice.InputStream` → numpy buffer → Silero VAD (silence check) → mlx-whisper → `pynput.keyboard.Controller.type()`
+3. **Hallucination Prevention** — Silero VAD pre-filters silence, backup chars/sec check catches edge cases
+4. **Keyboard Handling** — `pynput.Listener` with `on_press`/`on_release` callbacks implementing a state machine
+5. **Menu Bar** — `NSStatusBar` icon with Quit menu item via PyObjC (`MenuDelegate` + `setup_menu_bar()`)
+6. **Main Loop** — `NSApplication.sharedApplication().run()` on main thread (required for macOS event loop)
+7. **Health Monitor** — Background thread detecting stuck keys (>60s) and dead listener
 
 ### Recording State Machine
 ```
@@ -69,7 +70,7 @@ Toggle + hotkey press            → Stop recording, transcribe
 ### Build System
 `setup.py` configures py2app. Key settings:
 - `LSUIElement: True` — no Dock icon (background agent)
-- Packages explicitly bundled: numpy, sounddevice, pynput, mlx_whisper, mlx, av, huggingface_hub, tokenizers
+- Packages explicitly bundled: numpy, sounddevice, pynput, mlx_whisper, mlx, av, huggingface_hub, tokenizers, torch, silero-vad
 - `install_service.sh` code-signs with identity "Not Wispr Flow Dev" to preserve macOS permissions across rebuilds
 
 ## Configuration
@@ -99,12 +100,14 @@ CONTEXT_CHARS = 200              # Context window for transcription
 
 - **macOS permissions** must be granted to the **app bundle** ("Not Wispr Flow"), not Terminal/Python: Microphone + Accessibility + Input Monitoring (Privacy & Security)
 - **Clean build required** after code changes: `rm -rf build dist` before `python3 setup.py py2app`
+- **Silero VAD model** downloads automatically on first run (~6MB) via torch.hub, cached in `~/.cache/torch/hub/`
+- **VAD is the primary hallucination filter** — pre-filters silence before mlx-whisper, backup chars/sec check catches edge cases
 - **Exit code 0** on fatal errors is intentional — prevents LaunchAgent `KeepAlive` restart loops
 - **PID file lock** (`~/Library/Logs/NotWisprFlow/notwisprflow.pid`) prevents duplicate instances
 - **Audio callback** uses non-blocking lock (`acquire(blocking=False)`) to avoid audio glitches
 - **`stop_recording()`** snapshots the buffer before clearing — transcription thread owns its own copy, no shared state
 - **Log files**: `~/Library/Logs/NotWisprFlow/notwisprflow.log` (rotating, 10MB x 5), restricted permissions (0o700)
-- Model sizes: `base` (150MB, ~1GB RAM) for dev, `small` (500MB, ~2GB RAM) for production
+- Model sizes: Whisper `large-v3-turbo` (~1.6GB, ~2.3GB RAM), Silero VAD (~6MB, minimal RAM)
 
 ## Modifying the Code
 
@@ -116,6 +119,12 @@ CONTEXT_CHARS = 200              # Context window for transcription
 
 ### Changing Whisper parameters
 Edit `transcribe_and_type()` — the `state.whisper_model()` call accepts the audio float array and returns text.
+
+### Tuning VAD sensitivity
+In `contains_speech()` function, adjust these parameters:
+- `threshold` (0.3-0.6): Lower = more sensitive (catches quieter speech), higher = less false positives
+- `min_speech_duration_ms`: Minimum speech segment duration to consider valid
+- `min_silence_duration_ms`: Minimum silence duration to split segments
 
 ### Adding text post-processing
 Insert transformations in `transcribe_and_type()` after the line `text = state.whisper_model(audio_float)`.

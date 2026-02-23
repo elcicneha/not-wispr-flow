@@ -175,6 +175,10 @@ class AppState:
         # Initialized by initialize_whisper(), backend-agnostic
         self.whisper_model = None
 
+        # VAD model and utilities for silence detection (initialized at startup)
+        self.vad_model = None
+        self.vad_utils = None
+
         # Keyboard controller for typing output
         self.keyboard_controller = None
 
@@ -323,7 +327,7 @@ def initialize_whisper():
                         path_or_hf_repo=WHISPER_MODEL,
                         language="en",
                     )
-                    result_q.put(result["text"].strip())
+                    result_q.put(result)  # Return full dict for inspection
                 except Exception as e:
                     result_q.put(e)
         except Exception as e:
@@ -357,6 +361,88 @@ def initialize_whisper():
         logger.error("Please check your internet connection (first download) and try again.")
         # Exit 0 so LaunchAgent KeepAlive doesn't create an infinite restart loop
         sys.exit(0)
+
+
+# ============================================================================
+# VAD (Voice Activity Detection) Initialization
+# ============================================================================
+
+def initialize_vad():
+    """
+    Initialize Silero VAD model for silence detection.
+
+    Returns:
+        tuple: (model, utils) or (None, None) on failure
+    """
+    try:
+        logger.info("Loading Silero VAD model...")
+        import torch
+
+        # Load Silero VAD model and utilities
+        model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            force_reload=False,
+            onnx=False,  # Use PyTorch model for better compatibility
+            trust_repo=True  # Suppress security warning
+        )
+
+        logger.info("Silero VAD model loaded")
+        return model, utils
+    except Exception as e:
+        logger.error(f"Failed to load Silero VAD model: {e}")
+        logger.warning("Continuing without VAD - hallucinations may occur on silence")
+        return None, None
+
+
+def contains_speech(audio_float, sample_rate=SAMPLE_RATE, vad_model=None, vad_utils=None):
+    """
+    Check if audio contains speech using Silero VAD.
+
+    Args:
+        audio_float: Audio as float32 numpy array [-1.0, 1.0]
+        sample_rate: Sample rate (default: 16000)
+        vad_model: Silero VAD model (if None, skips VAD check)
+        vad_utils: Silero VAD utilities tuple (if None, skips VAD check)
+
+    Returns:
+        True if speech detected or VAD unavailable, False if silence detected
+    """
+    if vad_model is None or vad_utils is None:
+        return True  # If VAD not available, proceed with transcription
+
+    try:
+        import torch
+
+        # Convert to torch tensor
+        audio_tensor = torch.from_numpy(audio_float)
+
+        # Extract get_speech_timestamps function from utils
+        get_speech_timestamps = vad_utils[0]
+
+        speech_timestamps = get_speech_timestamps(
+            audio_tensor,
+            vad_model,
+            sampling_rate=sample_rate,
+            threshold=0.5,  # Confidence threshold (0.3-0.6 recommended)
+            min_speech_duration_ms=250,  # Minimum speech duration
+            min_silence_duration_ms=100,  # Minimum silence duration to split
+            return_seconds=False  # Return in samples, not seconds
+        )
+
+        # If we found any speech segments, return True
+        has_speech = len(speech_timestamps) > 0
+
+        if not has_speech:
+            logger.info("VAD: No speech detected in audio")
+        else:
+            logger.debug(f"VAD: Detected {len(speech_timestamps)} speech segment(s)")
+
+        return has_speech
+
+    except Exception as e:
+        logger.warning(f"VAD check failed: {e}, proceeding with transcription")
+        return True  # On error, proceed with transcription
 
 
 # ============================================================================
@@ -800,12 +886,37 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
 
         logger.debug(f"Transcribing {duration:.2f}s of audio...")
 
+        # VAD check: Skip transcription if no speech detected
+        if not contains_speech(audio_float, SAMPLE_RATE, state.vad_model, state.vad_utils):
+            logger.info("Skipping transcription - no speech detected by VAD")
+            return
+
         # Capture cursor context (kept for future use)
         context_before, context_after = get_cursor_context()
 
         # Transcribe with Whisper
         processing_start = time.time()
-        text = state.whisper_model(audio_float)
+        result = state.whisper_model(audio_float)
+
+        # Extract text and check for hallucinations
+        if isinstance(result, dict):
+            text = result.get("text", "").strip()
+            segments = result.get("segments", [])
+
+            # Backup hallucination detection (chars/sec check)
+            # VAD is the primary filter, but this catches edge cases where VAD
+            # lets through quiet audio that Whisper hallucinates on
+            if segments:
+                first_segment = segments[0]
+                segment_duration = first_segment.get("end", 0) - first_segment.get("start", 0)
+                chars_per_sec = len(text) / segment_duration if segment_duration > 0 else 0
+
+                # Real speech: 10-50 chars/sec, Sparse hallucinations: < 3 chars/sec
+                if chars_per_sec < 3.0 and segment_duration > 1.0:
+                    logger.info(f"Backup hallucination filter triggered ({chars_per_sec:.1f} chars/sec)")
+                    return
+        else:
+            text = str(result).strip()
 
         if not text:
             logger.info("No speech detected")
@@ -1341,6 +1452,9 @@ def main():
 
     # Initialize Whisper model
     state.whisper_model = initialize_whisper()
+
+    # Initialize Silero VAD for silence detection
+    state.vad_model, state.vad_utils = initialize_vad()
 
     # Initialize keyboard controller
     state.keyboard_controller = Controller()

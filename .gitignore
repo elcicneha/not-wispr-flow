@@ -43,3 +43,5 @@ future_plans.md
 build/
 dist/
 *.app
+
+create_menubar_icons.py
