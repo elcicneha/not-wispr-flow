@@ -59,6 +59,7 @@ OPTIONS = {
         'av',
         'huggingface_hub',
         'tokenizers',
+        'ApplicationServices',
     ],
 
     # Include specific compiled extensions

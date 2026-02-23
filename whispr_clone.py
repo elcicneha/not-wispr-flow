@@ -26,6 +26,14 @@ import signal
 import atexit
 import subprocess
 import objc
+from ApplicationServices import (
+    AXUIElementCreateSystemWide,
+    AXUIElementCopyAttributeValue,
+    kAXFocusedUIElementAttribute,
+    kAXValueAttribute,
+    kAXSelectedTextRangeAttribute,
+    kAXErrorSuccess,
+)
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSOnState, NSOffState
@@ -107,6 +115,7 @@ DEBUG = True            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
 MAX_RECORDING_DURATION = 300  # Maximum recording length in seconds (safety limit)
+CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
 
 # ============================================================================
 # HOTKEY CONFIGURATION - Change these to customize your recording keys!
@@ -377,6 +386,112 @@ def insert_text(text):
             )
 
 
+# CFRange struct for extracting cursor position via ctypes
+class _CFRange(ctypes.Structure):
+    _fields_ = [("location", ctypes.c_long), ("length", ctypes.c_long)]
+
+_ax_lib = ctypes.cdll.LoadLibrary(
+    '/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices'
+)
+_ax_lib.AXValueGetValue.restype = ctypes.c_bool
+_ax_lib.AXValueGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+_kAXValueTypeCFRange = 4
+
+
+def get_cursor_context(max_chars=CONTEXT_CHARS):
+    """
+    Read text around the cursor in the active application using macOS Accessibility APIs.
+
+    Returns:
+        tuple: (before_text, after_text) where each is a string or None on failure.
+    """
+    try:
+        from ApplicationServices import AXUIElementCreateApplication
+        from AppKit import NSWorkspace
+
+        # Get the frontmost application's PID
+        frontmost = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if frontmost is None:
+            logger.debug("AX: No frontmost application found")
+            return None, None
+        pid = frontmost.processIdentifier()
+        app_name = frontmost.localizedName()
+
+        # Get the focused UI element from the app
+        app_element = AXUIElementCreateApplication(pid)
+        err, focused = AXUIElementCopyAttributeValue(
+            app_element, kAXFocusedUIElementAttribute, None
+        )
+        if err != kAXErrorSuccess or focused is None:
+            logger.debug(f"AX: No focused element in {app_name} (err={err})")
+            return None, None
+
+        # Get text value
+        err, value = AXUIElementCopyAttributeValue(
+            focused, kAXValueAttribute, None
+        )
+        if err != kAXErrorSuccess or value is None:
+            logger.debug(f"AX: No text value in focused element (err={err})")
+            return None, None
+
+        text = str(value)
+        if not text:
+            return "", ""
+
+        # Get cursor position using ctypes to extract CFRange from AXValueRef
+        err, range_val = AXUIElementCopyAttributeValue(
+            focused, kAXSelectedTextRangeAttribute, None
+        )
+        if err != kAXErrorSuccess or range_val is None:
+            logger.debug(f"AX: No cursor position available (err={err})")
+            return None, None
+
+        cf_range = _CFRange()
+        ax_ptr = objc.pyobjc_id(range_val)
+        if not _ax_lib.AXValueGetValue(ax_ptr, _kAXValueTypeCFRange, ctypes.byref(cf_range)):
+            logger.debug("AX: Failed to extract CFRange from AXValueRef")
+            return None, None
+
+        cursor_pos = cf_range.location
+
+        before = text[max(0, cursor_pos - max_chars):cursor_pos]
+        after = text[cursor_pos:cursor_pos + max_chars]
+
+        logger.debug(f"AX: Cursor context from {app_name}: {len(before)} chars before, {len(after)} chars after (pos {cursor_pos})")
+        return before, after
+
+    except Exception as e:
+        logger.debug(f"AX: Cursor context detection failed: {e}")
+        return None, None
+
+
+# ============================================================================
+# Text Post-Processing
+# ============================================================================
+
+def post_process(text, context_before, context_after):
+    """
+    Apply post-processing transformations to transcribed text.
+
+    Args:
+        text: Raw transcribed text
+        context_before: Text preceding the cursor (may be None)
+        context_after: Text following the cursor (may be None)
+
+    Returns:
+        str: Post-processed text ready for insertion
+    """
+    # Ensure a leading space if the text before the cursor doesn't end with one
+    if context_before and not context_before[-1].isspace() and not text[0].isspace():
+        text = " " + text
+
+    # Add trailing space so the cursor is ready for the next word
+    if not text.endswith(" "):
+        text = text + " "
+
+    return text
+
+
 def transcribe_and_type(audio_buffer):
     """
     Transcribe recorded audio using Whisper and type the result.
@@ -405,12 +520,15 @@ def transcribe_and_type(audio_buffer):
 
         logger.debug(f"Transcribing {duration:.2f}s of audio...")
 
+        # Capture cursor context (kept for future use)
+        context_before, context_after = get_cursor_context()
+
         # Transcribe with Whisper
         segments, info = state.whisper_model.transcribe(
             audio_float,
             language="en",      # English only for faster processing
             beam_size=5,
-            vad_filter=True     # Voice Activity Detection filter
+            vad_filter=True,    # Voice Activity Detection filter
         )
 
         # Extract text from segments
@@ -419,6 +537,9 @@ def transcribe_and_type(audio_buffer):
         if not text:
             logger.info("No speech detected")
             return
+
+        # Post-process transcribed text
+        text = post_process(text, context_before, context_after)
 
         # Only log transcription content in debug mode (may contain sensitive data)
         logger.debug(f"Transcription: {text}")
@@ -449,8 +570,8 @@ def on_press(key):
       mode=hold  + space               → convert to toggle mode (keep recording)
       mode=toggle + hotkey             → stop recording, mode=None
     """
-    if DEBUG:
-        logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
+    # if DEBUG:
+    #     logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
 
     current_time = time.time() * 1000  # Convert to milliseconds
 
@@ -508,8 +629,8 @@ def on_release(key):
       mode=hold + hotkey released → stop recording, mode=None
       (toggle mode ignores hotkey release — stop happens on next hotkey press)
     """
-    if DEBUG:
-        logger.debug(f"Key release: {key!r} (type={type(key).__name__})")
+    # if DEBUG:
+    #     logger.debug(f"Key release: {key!r} (type={type(key).__name__})")
 
     with state.lock:
         if is_hotkey(key):
