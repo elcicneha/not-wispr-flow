@@ -1273,7 +1273,7 @@ def health_monitor(listener, shutdown_event):
 
         # Flush buffer to disk if it exceeds threshold (crash recovery)
         if state.is_recording:
-            buffer_bytes = sum(c.nbytes for c in state.audio_buffer)
+            buffer_bytes = sum(c.nbytes for c in list(state.audio_buffer))
             if buffer_bytes / (1024 * 1024) >= FLUSH_BUFFER_THRESHOLD_MB:
                 flush_buffer_to_disk()
 
