@@ -19,6 +19,29 @@ from pynput.keyboard import Key
 #
 WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 
+# LANGUAGE: Control which language(s) Whisper should transcribe
+#
+# Options:
+#   "en"     - English only (recommended - prevents hallucinations in other languages)
+#   None     - Auto-detect ANY language (for multilingual use: English + Spanish, etc.)
+#   "es"     - Spanish only
+#   "hi"     - Hindi only (outputs Devanagari script)
+#   "pa"     - Punjabi only (outputs Gurmukhi script)
+#   etc. (see Whisper docs for 99+ supported languages)
+#
+# IMPORTANT: Whisper does NOT support specifying multiple specific languages like ["en", "es"].
+# Your options are:
+#   1. Force ONE language: LANGUAGE = "en"  (ignores all other languages)
+#   2. Auto-detect ALL languages: LANGUAGE = None  (detects English, Spanish, Hindi, etc.)
+#
+# For English + Spanish dictation, use: LANGUAGE = None
+# This enables auto-detection and switches between languages automatically.
+#
+# NOTE: Forcing "en" on Hindi/Punjabi may produce romanized output (Hinglish) but results
+# are inconsistent. For reliable Hinglish, use language="hi" + transliteration library.
+#
+LANGUAGE = "en"
+
 # ============================================================================
 # HOTKEY CONFIGURATION
 # ============================================================================

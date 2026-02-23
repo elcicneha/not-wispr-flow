@@ -45,7 +45,7 @@ from AppKit import (
 # ============================================================================
 # User Configuration - imported from config.py
 # ============================================================================
-from config import HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG
+from config import HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE
 
 # ============================================================================
 # Logging Configuration
@@ -223,7 +223,7 @@ class MenuBarIconManager:
     """Manages menu bar icon state and animations."""
 
     # Animation speeds in milliseconds - adjust these to change animation speed
-    RECORDING_FRAME_INTERVAL = 100   # Recording animation speed (fast, bouncy)
+    RECORDING_FRAME_INTERVAL = 200   # Recording animation speed (fast, bouncy)
     PROCESSING_FRAME_INTERVAL = 300  # Processing animation speed (slower, calmer)
 
     def __init__(self):
@@ -399,7 +399,7 @@ def initialize_whisper():
 
             # Pre-warm: download + load model on this thread
             silent_audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
-            mlx_whisper.transcribe(silent_audio, path_or_hf_repo=WHISPER_MODEL, language="en")
+            mlx_whisper.transcribe(silent_audio, path_or_hf_repo=WHISPER_MODEL, language=LANGUAGE)
             result_q.put(True)
 
             # Process transcription requests forever
@@ -409,7 +409,7 @@ def initialize_whisper():
                     result = mlx_whisper.transcribe(
                         audio_float,
                         path_or_hf_repo=WHISPER_MODEL,
-                        language="en",
+                        language=LANGUAGE,
                     )
                     result_q.put(result)  # Return full dict for inspection
                 except Exception as e:

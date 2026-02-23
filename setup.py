@@ -32,6 +32,10 @@ DATA_FILES = [
         'icons/menubar_processing_2@2x.png',
         'icons/menubar_processing_3.png',
         'icons/menubar_processing_3@2x.png'
+    ]),
+    # MLX Metal shader library (will be moved to Frameworks by install script)
+    ('', [
+        'venv/lib/python3.14/site-packages/mlx/lib/mlx.metallib',
     ])
 ]
 
@@ -72,11 +76,11 @@ OPTIONS = {
         'sounddevice',
         '_sounddevice_data',
         'pynput',
-        'mlx_whisper',
-        'mlx',
         'av',
         'huggingface_hub',
         'tokenizers',
+        'torch',
+        'torchaudio',
         'ApplicationServices',
     ],
 
@@ -86,13 +90,29 @@ OPTIONS = {
         'numpy.core._multiarray_umath',
         'numpy.linalg._umath_linalg',
 
+        # MLX modules (namespace package with compiled extensions)
+        'mlx.core',
+        'mlx.core.metal',
+        'mlx.nn',
+        'mlx.nn.layers',
+        'mlx.utils',
+        'mlx._reprlib_fix',
+
+        # mlx_whisper modules
+        'mlx_whisper',
+        'mlx_whisper.transcribe',
+        'mlx_whisper.audio',
+        'mlx_whisper.load_models',
+
         # Other critical imports
         'cffi',
         'pycparser',
     ],
 
     # Frameworks to bundle (PyObjC frameworks for keyboard control)
-    'frameworks': [],
+    'frameworks': [
+        'venv/lib/python3.14/site-packages/mlx/lib/libmlx.dylib',
+    ],
 
     # Don't include these packages (reduce bundle size)
     'excludes': [

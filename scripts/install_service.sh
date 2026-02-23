@@ -60,11 +60,7 @@ check_prerequisites() {
         log_success "Found code signing certificate: '$CODESIGN_IDENTITY'"
     else
         log_error "Code signing certificate '$CODESIGN_IDENTITY' not found"
-        log_info "Without this certificate, you must re-grant permissions after every rebuild."
-        log_info "To create it (one-time setup):"
-        log_info "  1. Open Keychain Access: open /Applications/Utilities/Keychain\\ Access.app"
-        log_info "  2. Menu: Keychain Access > Certificate Assistant > Create a Certificate..."
-        log_info "  3. Name: '$CODESIGN_IDENTITY', Identity Type: Self Signed Root, Certificate Type: Code Signing"
+        log_info "Please create it first: ./scripts/create_certificate.sh"
         exit 1
     fi
 
@@ -117,6 +113,34 @@ build_app_bundle() {
 
     log_success "App bundle created: $APP_BUNDLE"
 
+    # Fix MLX library rpaths
+    log_info "Fixing MLX library rpaths..."
+    local mlx_core_so="$APP_BUNDLE/Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so"
+    local frameworks_dir="$APP_BUNDLE/Contents/Frameworks"
+
+    if [ -f "$mlx_core_so" ]; then
+        # Add rpath to Frameworks directory so core.so can find libmlx.dylib
+        # core.so is at: Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so
+        # libmlx.dylib is at: Contents/Frameworks/libmlx.dylib
+        # Need to go up 5 levels: mlx -> lib-dynload -> python3.14 -> lib -> Resources -> Contents
+        install_name_tool -add_rpath "@loader_path/../../../../../Frameworks" "$mlx_core_so" 2>/dev/null || true
+        log_success "Fixed rpath for mlx/core.so"
+    else
+        log_warning "mlx/core.so not found, skipping rpath fix"
+    fi
+
+    # Move MLX metallib to Frameworks (must be colocated with libmlx.dylib)
+    log_info "Moving mlx.metallib to Frameworks directory..."
+    local metallib_source="$APP_BUNDLE/Contents/Resources/mlx.metallib"
+    local metallib_dest="$APP_BUNDLE/Contents/Frameworks/mlx.metallib"
+
+    if [ -f "$metallib_source" ]; then
+        mv "$metallib_source" "$metallib_dest"
+        log_success "Moved mlx.metallib to Frameworks (colocated with libmlx.dylib)"
+    else
+        log_warning "mlx.metallib not found at $metallib_source"
+    fi
+
     # Verify bundle
     log_info "Verifying bundle contents..."
     if [ -f "$SCRIPT_DIR/verify_bundle.sh" ]; then
@@ -137,6 +161,14 @@ install_app() {
 
     # Copy to /Applications
     cp -R "$APP_BUNDLE" "$APP_INSTALL_PATH"
+
+    # Sign mlx/core.so individually (install_name_tool invalidated its signature)
+    local mlx_core_so="$APP_INSTALL_PATH/Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so"
+    if [ -f "$mlx_core_so" ]; then
+        log_info "Signing modified mlx/core.so..."
+        codesign --force --sign "$CODESIGN_IDENTITY" "$mlx_core_so"
+        log_success "Signed mlx/core.so"
+    fi
 
     # Sign the installed app (using persistent certificate preserves permissions across rebuilds)
     log_info "Signing app with identity: $CODESIGN_IDENTITY"

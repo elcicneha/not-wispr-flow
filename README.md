@@ -80,40 +80,14 @@ python3 main.py
 
 **Step 1: Create certificate (one-time)**
 
-**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. This creates a local certificate so permissions persist. The certificate never leaves your computer.
+Run this and follow the prompts — it opens Keychain Access and guides you through creating the certificate:
+```bash
+./scripts/create_certificate.sh
+```
 
-**Important:** The install script requires this certificate. If you skip this step, the installation will fail.
+**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. The certificate is local and never leaves your computer.
 
 **Not comfortable with this?** Use Option A instead — no certificate needed.
-
-Paste this into Terminal. You'll be asked for your Mac password a few times:
-```bash
-cat > /tmp/create_cert.sh << 'EOF'
-#!/bin/bash
-CERT_NAME="Not Wispr Flow Dev"
-cat > /tmp/cert_config.conf <<CONF
-[ req ]
-default_bits = 2048
-distinguished_name = req_distinguished_name
-x509_extensions = v3_ca
-[ req_distinguished_name ]
-commonName = $CERT_NAME
-[ v3_ca ]
-basicConstraints = critical,CA:TRUE
-keyUsage = critical,keyCertSign,cRLSign,digitalSignature
-CONF
-openssl req -new -newkey rsa:2048 -x509 -days 3650 -nodes \
-  -out /tmp/cert.pem -keyout /tmp/key.pem \
-  -config /tmp/cert_config.conf -subj "/CN=$CERT_NAME"
-openssl pkcs12 -export -out /tmp/cert.p12 \
-  -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:
-security import /tmp/cert.p12 -k ~/Library/Keychains/login.keychain-db \
-  -T /usr/bin/codesign -T /usr/bin/security
-rm -f /tmp/cert.pem /tmp/key.pem /tmp/cert.p12 /tmp/cert_config.conf
-echo "Certificate created!"
-EOF
-chmod +x /tmp/create_cert.sh && /tmp/create_cert.sh
-```
 
 **Step 2: Install the app**
 ```bash
@@ -122,7 +96,7 @@ cd ~/not-wispr-flow
 ```
 This takes a minute or two.
 
-**Step 3: Launch the app**
+**Step 2: Launch the app**
 
 Open "Not Wispr Flow" from Spotlight or your Applications folder. You'll see the icon in your menu bar (top-right).
 
