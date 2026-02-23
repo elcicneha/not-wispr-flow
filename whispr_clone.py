@@ -115,7 +115,7 @@ DTYPE = 'int16'         # Audio data type for sounddevice
 DEBUG = False            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.5  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
-FLUSH_BUFFER_THRESHOLD_MB = 10  # Flush buffer to disk when it exceeds this (~5 min of audio, crash recovery)
+FLUSH_BUFFER_THRESHOLD_MB = 5  # Flush buffer to disk when it exceeds this (crash recovery)
 CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
 
 # ============================================================================
@@ -202,6 +202,9 @@ class AppState:
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
         self.use_type_mode = False       # False = clipboard paste (default), True = character-by-character
 
+        # Transcription state tracking
+        self.is_transcribing = False     # True when transcription thread is running
+
         # Debouncing
         self.last_press_time = 0
 
@@ -222,11 +225,22 @@ ICON_IDLE = "\U0001f3a4"       # 🎤
 ICON_RECORDING = "\U0001f534"  # 🔴
 
 
-def _update_menu_icon(recording):
-    """Update menu bar icon to reflect recording state. Thread-safe."""
+def _update_menu_icon(state_name):
+    """
+    Update menu bar icon based on application state. Thread-safe.
+
+    Args:
+        state_name: One of 'idle', 'recording', or 'transcribing'
+    """
+    icons = {
+        'idle': ICON_IDLE,          # 🎤
+        'recording': ICON_RECORDING, # 🔴
+        'transcribing': '⏳'         # Hourglass
+    }
+    icon = icons.get(state_name, ICON_IDLE)
+
     try:
         if state.status_button is not None:
-            icon = ICON_RECORDING if recording else ICON_IDLE
             state.status_button.performSelectorOnMainThread_withObject_waitUntilDone_(
                 'setTitle:', icon, False
             )
@@ -320,13 +334,13 @@ def start_recording():
         )
         state.audio_stream.start()
         state.is_recording = True
-        _update_menu_icon(True)
+        _update_menu_icon('recording')
         logger.debug(f"Recording started - Mode: {state.mode}")
     except Exception:
         # Guarantee clean state on failure
         _cleanup_stream()
         state.is_recording = False
-        _update_menu_icon(False)
+        _update_menu_icon('idle')
         raise
 
 
@@ -436,10 +450,10 @@ def stop_recording():
     state.recording_start_time = None
     state.is_recording = False
     _cleanup_stream()
-    _update_menu_icon(False)
 
     if not buffer_snapshot and not overflow_snapshot:
         logger.debug("Recording stopped - empty buffer, skipping transcription")
+        _update_menu_icon('idle')
         return
 
     # Calculate buffer statistics (in-memory portion only)
@@ -452,9 +466,13 @@ def stop_recording():
 
     logger.debug(f"Recording stopped - Buffer: {buffer_size_mb:.1f}MB ({len(buffer_snapshot)} chunks, {duration_sec:.1f}s), overflow files: {len(overflow_snapshot)}")
 
-    # Transcription in separate thread — owns buffer_snapshot + overflow_snapshot, no shared state
+    # Set transcription flag and update UI before spawning thread
+    state.is_transcribing = True
+    _update_menu_icon('transcribing')  # Show ⏳ icon
+
+    # Transcription in separate thread — wrapper ensures cleanup
     threading.Thread(
-        target=transcribe_and_type,
+        target=_transcription_wrapper,
         args=(buffer_snapshot,),
         kwargs={
             "overflow_files": overflow_snapshot,
@@ -463,6 +481,19 @@ def stop_recording():
         },
         daemon=True,
     ).start()
+
+
+def _transcription_wrapper(audio_buffer, **kwargs):
+    """
+    Wrapper for transcription thread that tracks state and ensures cleanup.
+    Updates is_transcribing flag and menu state before/after transcription.
+    Ensures flag is reset even if transcription fails.
+    """
+    try:
+        transcribe_and_type(audio_buffer, **kwargs)
+    finally:
+        state.is_transcribing = False
+        _update_menu_icon('idle')  # Reset to 🎤 icon
 
 
 # ============================================================================
@@ -476,7 +507,9 @@ def insert_text(text):
     Falls back to character-by-character typing when use_type_mode is enabled.
     Always saves the text as last_transcription for "Retype Last" menu action.
     """
-    state.last_transcription = text
+    # Save to last_transcription with lock protection
+    with state.lock:
+        state.last_transcription = text
 
     if state.use_type_mode:
         state.keyboard_controller.type(text)
@@ -1006,7 +1039,9 @@ class MenuDelegate(NSObject):
 
     def retypeLast_(self, sender):
         """Type last transcription character-by-character in a background thread."""
-        text = state.last_transcription
+        # Thread-safe read of last_transcription
+        with state.lock:
+            text = state.last_transcription
         if text:
             threading.Thread(
                 target=state.keyboard_controller.type,
@@ -1074,7 +1109,7 @@ def setup_menu_bar(shutdown_event):
 
     # Quit
     quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Quit Whispr", "quit:", ""
+        "Quit Whispr", "quit:", "q"  # Cmd+Q
     )
     quit_item.setTarget_(delegate)
     menu.addItem_(quit_item)
