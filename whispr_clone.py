@@ -135,7 +135,7 @@ CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper c
 HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}  # All key codes that trigger recording
 TOGGLE_KEY = Key.space                # Key to combine with hotkey for toggle mode
 
-KEY_STATE_TIMEOUT = 60  # Seconds before a "stuck" key press is auto-reset
+KEY_STATE_TIMEOUT = 10  # Seconds before a "stuck" key press is auto-reset
 
 
 def is_hotkey(key):
@@ -209,9 +209,28 @@ class AppState:
         # Debouncing
         self.last_press_time = 0
 
+        # Menu bar button reference (set by setup_menu_bar)
+        self.status_button = None
+
 
 # Global state instance
 state = AppState()
+
+
+ICON_IDLE = "\U0001f3a4"       # 🎤
+ICON_RECORDING = "\U0001f534"  # 🔴
+
+
+def _update_menu_icon(recording):
+    """Update menu bar icon to reflect recording state. Thread-safe."""
+    try:
+        if state.status_button is not None:
+            icon = ICON_RECORDING if recording else ICON_IDLE
+            state.status_button.performSelectorOnMainThread_withObject_waitUntilDone_(
+                'setTitle:', icon, False
+            )
+    except Exception:
+        pass
 
 
 # ============================================================================
@@ -303,11 +322,13 @@ def start_recording():
         )
         state.audio_stream.start()
         state.is_recording = True
+        _update_menu_icon(True)
         logger.debug(f"Recording started - Mode: {state.mode}")
     except Exception:
         # Guarantee clean state on failure
         _cleanup_stream()
         state.is_recording = False
+        _update_menu_icon(False)
         raise
 
 
@@ -335,6 +356,7 @@ def stop_recording():
     state.audio_buffer = []
     state.is_recording = False
     _cleanup_stream()
+    _update_menu_icon(False)
 
     if not buffer_snapshot:
         logger.debug("Recording stopped - empty buffer, skipping transcription")
@@ -475,20 +497,35 @@ def post_process(text, context_before, context_after):
 
     Args:
         text: Raw transcribed text
-        context_before: Text preceding the cursor (may be None)
-        context_after: Text following the cursor (may be None)
+        context_before: Text preceding the cursor (may be None or empty string)
+        context_after: Text following the cursor (may be None or empty string)
 
     Returns:
         str: Post-processed text ready for insertion
     """
-    # Ensure a leading space if the text before the cursor doesn't end with one
-    if context_before and not context_before[-1].isspace() and not text[0].isspace():
+    logger.debug(f"Post-process INPUT: context_before={repr(context_before)}, text={repr(text)}")
+
+    # Only add a leading space if:
+    # - There's actual non-whitespace text before the cursor (not empty/None/whitespace-only)
+    # - We're not at the start of a new line (after a newline character)
+    # - The text before doesn't end with whitespace
+    # - Our transcribed text doesn't start with whitespace
+    should_add_leading_space = False
+    if (context_before and text and
+        context_before.strip() and  # Has actual non-whitespace content
+        context_before[-1] != '\n' and  # Not at start of new line
+        not context_before[-1].isspace() and  # Not after any whitespace
+        not text[0].isspace()):  # Text doesn't start with space
+        should_add_leading_space = True
         text = " " + text
+
+    logger.debug(f"Post-process: added_leading_space={should_add_leading_space}")
 
     # Add trailing space so the cursor is ready for the next word
     if not text.endswith(" "):
         text = text + " "
 
+    logger.debug(f"Post-process OUTPUT: text={repr(text)}")
     return text
 
 
@@ -564,61 +601,73 @@ def on_press(key):
     Handle keyboard key press events.
 
     State machine transitions on press:
-      mode=None  + hotkey              → hold mode, start recording
-      mode=None  + hotkey (space held) → toggle mode, start recording
-      mode=None  + space (hotkey held) → toggle mode, start recording
-      mode=hold  + space               → convert to toggle mode (keep recording)
-      mode=toggle + hotkey             → stop recording, mode=None
+      mode=None   + hotkey              → hold mode, start recording
+      mode=None   + hotkey (space held) → toggle mode, start recording
+      mode=None   + space (hotkey held) → toggle mode, start recording
+      mode=hold   + space               → convert to toggle mode (keep recording)
+      mode=hold   + hotkey              → missed release recovery, stop recording
+      mode=toggle + hotkey              → stop recording, mode=None
     """
     # if DEBUG:
     #     logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
 
     current_time = time.time() * 1000  # Convert to milliseconds
 
-    with state.lock:
-        if is_hotkey(key):
-            # Debounce: ignore if too soon after last press
-            if current_time - state.last_press_time < DEBOUNCE_MS:
-                return
-
-            state.last_press_time = current_time
-            state.hotkey_pressed = True
-            state.hotkey_press_time = time.time()
-
-            if state.mode is None:
-                # Start recording — toggle if space already held, else hold
-                state.mode = "toggle" if state.space_pressed else "hold"
-                try:
-                    start_recording()
-                except Exception as e:
-                    logger.error(f"Failed to start recording: {e}")
-                    state.mode = None
+    try:
+        with state.lock:
+            if is_hotkey(key):
+                # Debounce: ignore if too soon after last press
+                if current_time - state.last_press_time < DEBOUNCE_MS:
                     return
-                logger.info(f"{state.mode.capitalize()} mode: Recording started")
 
-            elif state.mode == "toggle" and state.is_recording:
-                stop_recording()
-                state.mode = None
-                logger.info("Toggle mode: Recording stopped")
+                state.last_press_time = current_time
+                state.hotkey_pressed = True
+                state.hotkey_press_time = time.time()
 
-        elif key == TOGGLE_KEY:
-            state.space_pressed = True
-
-            if state.hotkey_pressed:
                 if state.mode is None:
-                    # Hotkey already held, space just arrived → toggle mode
-                    state.mode = "toggle"
+                    # Start recording — toggle if space already held, else hold
+                    state.mode = "toggle" if state.space_pressed else "hold"
                     try:
                         start_recording()
                     except Exception as e:
                         logger.error(f"Failed to start recording: {e}")
                         state.mode = None
                         return
-                    logger.info("Toggle mode: Recording started")
-                elif state.mode == "hold":
-                    # Convert hold → toggle (recording continues uninterrupted)
-                    state.mode = "toggle"
-                    logger.debug("Converted hold mode to toggle mode")
+                    logger.info(f"{state.mode.capitalize()} mode: Recording started")
+
+                elif state.mode == "toggle" and state.is_recording:
+                    stop_recording()
+                    state.mode = None
+                    logger.info("Toggle mode: Recording stopped")
+
+                elif state.mode == "hold" and state.is_recording:
+                    # Hotkey pressed while in hold mode — release event was missed.
+                    # Stop recording and reset so the user can start fresh.
+                    logger.warning("Hold mode: Hotkey pressed again (missed release?), stopping recording")
+                    stop_recording()
+                    state.mode = None
+
+            elif key == TOGGLE_KEY:
+                state.space_pressed = True
+
+                if state.hotkey_pressed:
+                    if state.mode is None:
+                        # Hotkey already held, space just arrived → toggle mode
+                        state.mode = "toggle"
+                        try:
+                            start_recording()
+                        except Exception as e:
+                            logger.error(f"Failed to start recording: {e}")
+                            state.mode = None
+                            return
+                        logger.info("Toggle mode: Recording started")
+                    elif state.mode == "hold":
+                        # Convert hold → toggle (recording continues uninterrupted)
+                        state.mode = "toggle"
+                        logger.debug("Converted hold mode to toggle mode")
+    except Exception as e:
+        if logger:
+            logger.error(f"Error in on_press handler: {e}")
 
 
 def on_release(key):
@@ -632,17 +681,21 @@ def on_release(key):
     # if DEBUG:
     #     logger.debug(f"Key release: {key!r} (type={type(key).__name__})")
 
-    with state.lock:
-        if is_hotkey(key):
-            state.hotkey_pressed = False
+    try:
+        with state.lock:
+            if is_hotkey(key):
+                state.hotkey_pressed = False
 
-            if state.mode == "hold" and state.is_recording:
-                stop_recording()
-                state.mode = None
-                logger.info("Hold mode: Recording stopped")
+                if state.mode == "hold" and state.is_recording:
+                    stop_recording()
+                    state.mode = None
+                    logger.info("Hold mode: Recording stopped")
 
-        elif key == TOGGLE_KEY:
-            state.space_pressed = False
+            elif key == TOGGLE_KEY:
+                state.space_pressed = False
+    except Exception as e:
+        if logger:
+            logger.error(f"Error in on_release handler: {e}")
 
 
 # ============================================================================
@@ -856,7 +909,8 @@ def setup_menu_bar(shutdown_event):
     status_bar = NSStatusBar.systemStatusBar()
     status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
     button = status_item.button()
-    button.setTitle_("\U0001f3a4")  # microphone emoji
+    button.setTitle_(ICON_IDLE)
+    state.status_button = button
 
     delegate = MenuDelegate.alloc().init()
     delegate.shutdown_event = shutdown_event
