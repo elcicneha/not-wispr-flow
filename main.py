@@ -699,8 +699,6 @@ def post_process(text, context_before, context_after):
     Returns:
         str: Post-processed text ready for insertion
     """
-    logger.debug(f"Post-process INPUT: context_before={repr(context_before)}, text={repr(text)}")
-
     # Only add a leading space if:
     # - There's actual non-whitespace text before the cursor (not empty/None/whitespace-only)
     # - We're not at the start of a new line (after a newline character)
@@ -715,8 +713,6 @@ def post_process(text, context_before, context_after):
         should_add_leading_space = True
         text = " " + text
 
-    logger.debug(f"Post-process: added_leading_space={should_add_leading_space}")
-
     # Only add trailing space if context after doesn't start with a space
     should_add_trailing_space = True
     if context_after and context_after[0].isspace():
@@ -725,8 +721,6 @@ def post_process(text, context_before, context_after):
     if should_add_trailing_space and not text.endswith(" "):
         text = text + " "
 
-    logger.debug(f"Post-process: added_trailing_space={should_add_trailing_space}")
-    logger.debug(f"Post-process OUTPUT: text={repr(text)}")
     return text
 
 
@@ -840,9 +834,6 @@ def on_press(key):
       mode set + not recording + no data  → reset to idle, then start new recording
       transcription hung (>60s)           → clear flag so user can record again
     """
-    # if DEBUG:
-    #     logger.debug(f"Key press: {key!r} (type={type(key).__name__}, match={is_hotkey(key)})")
-
     current_time = time.time() * 1000  # Convert to milliseconds
 
     try:
@@ -949,9 +940,6 @@ def on_release(key):
     Stuck state recovery:
       mode=hold + not recording → reset mode to None (stream crashed)
     """
-    # if DEBUG:
-    #     logger.debug(f"Key release: {key!r} (type={type(key).__name__})")
-
     try:
         with state.lock:
             if is_hotkey(key):

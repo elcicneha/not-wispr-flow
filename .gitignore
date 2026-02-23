@@ -35,6 +35,10 @@ ENV/
 # Recording stats
 recording_stats.jsonl
 
+# Private dev notes
+DESIGN_DECISIONS.md
+future_plans.md
+
 # py2app build artifacts
 build/
 dist/
