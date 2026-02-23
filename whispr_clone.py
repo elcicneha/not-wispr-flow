@@ -521,10 +521,15 @@ def post_process(text, context_before, context_after):
 
     logger.debug(f"Post-process: added_leading_space={should_add_leading_space}")
 
-    # Add trailing space so the cursor is ready for the next word
-    if not text.endswith(" "):
+    # Only add trailing space if context after doesn't start with a space
+    should_add_trailing_space = True
+    if context_after and context_after[0].isspace():
+        should_add_trailing_space = False
+
+    if should_add_trailing_space and not text.endswith(" "):
         text = text + " "
 
+    logger.debug(f"Post-process: added_trailing_space={should_add_trailing_space}")
     logger.debug(f"Post-process OUTPUT: text={repr(text)}")
     return text
 
