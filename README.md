@@ -80,12 +80,14 @@ python3 main.py
 
 **Step 1: Create certificate (one-time)**
 
-Run this and follow the prompts — it opens Keychain Access and guides you through creating the certificate:
+Run this script to automatically create a self-signed code signing certificate:
 ```bash
 ./scripts/create_certificate.sh
 ```
 
-**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. The certificate is local and never leaves your computer.
+You'll be prompted to enter your macOS login password once. The script handles everything else automatically via command line.
+
+**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. The certificate is created locally and never leaves your computer.
 
 **Not comfortable with this?** Use Option A instead — no certificate needed.
 
