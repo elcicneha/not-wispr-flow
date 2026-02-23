@@ -38,7 +38,8 @@ from ApplicationServices import (
 )
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
-    NSVariableStatusItemLength, NSObject, NSOnState, NSOffState
+    NSVariableStatusItemLength, NSObject, NSOnState, NSOffState,
+    NSImage
 )
 
 # ============================================================================
@@ -211,8 +212,54 @@ class AppState:
 state = AppState()
 
 
-ICON_IDLE = "\U0001f3a4"       # 🎤
-ICON_RECORDING = "\U0001f534"  # 🔴
+def _load_menu_bar_icon(icon_name):
+    """
+    Load menu bar icon from icons directory with proper @2x retina support.
+
+    Args:
+        icon_name: Base name of icon (e.g., 'menubar_idle', 'menubar_recording')
+
+    Returns:
+        NSImage configured as a template image (auto-inverts for dark mode).
+    """
+    # Get the directory where main.py is located
+    if getattr(sys, 'frozen', False):
+        # Running as bundled .app
+        bundle_dir = os.path.dirname(sys.executable)
+        base_path = os.path.join(bundle_dir, '..', 'Resources')
+    else:
+        # Running as script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        base_path = os.path.join(script_dir, 'icons')
+
+    icon_1x_path = os.path.join(base_path, f'{icon_name}.png')
+    icon_2x_path = os.path.join(base_path, f'{icon_name}@2x.png')
+
+    # Create NSImage and add both @1x and @2x representations
+    icon = NSImage.alloc().initWithSize_((22, 22))  # Base size in points
+
+    # Add @1x representation
+    if os.path.exists(icon_1x_path):
+        rep_1x = NSImage.alloc().initWithContentsOfFile_(icon_1x_path)
+        if rep_1x and rep_1x.representations():
+            icon.addRepresentation_(rep_1x.representations()[0])
+
+    # Add @2x representation for retina displays
+    if os.path.exists(icon_2x_path):
+        rep_2x = NSImage.alloc().initWithContentsOfFile_(icon_2x_path)
+        if rep_2x and rep_2x.representations():
+            icon.addRepresentation_(rep_2x.representations()[0])
+
+    icon.setTemplate_(True)  # Enable automatic dark mode inversion
+    return icon
+
+
+# Load menu bar icons for all states
+MENU_BAR_ICONS = {
+    'idle': _load_menu_bar_icon('menubar_idle'),
+    'recording': _load_menu_bar_icon('menubar_recording'),
+    'transcribing': _load_menu_bar_icon('menubar_processing')
+}
 
 
 def _update_menu_icon(state_name):
@@ -222,17 +269,13 @@ def _update_menu_icon(state_name):
     Args:
         state_name: One of 'idle', 'recording', or 'transcribing'
     """
-    icons = {
-        'idle': ICON_IDLE,          # 🎤
-        'recording': ICON_RECORDING, # 🔴
-        'transcribing': '⏳'         # Hourglass
-    }
-    icon = icons.get(state_name, ICON_IDLE)
+    # Get the appropriate icon for this state
+    icon = MENU_BAR_ICONS.get(state_name, MENU_BAR_ICONS['idle'])
 
     try:
-        if state.status_button is not None:
+        if state.status_button is not None and icon is not None:
             state.status_button.performSelectorOnMainThread_withObject_waitUntilDone_(
-                'setTitle:', icon, False
+                'setImage:', icon, False
             )
     except Exception:
         pass
@@ -1178,7 +1221,8 @@ def setup_menu_bar(shutdown_event):
     status_bar = NSStatusBar.systemStatusBar()
     status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
     button = status_item.button()
-    button.setTitle_(ICON_IDLE)
+    if MENU_BAR_ICONS.get('idle') is not None:
+        button.setImage_(MENU_BAR_ICONS['idle'])
     state.status_button = button
 
     delegate = MenuDelegate.alloc().init()

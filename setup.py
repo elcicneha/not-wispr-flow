@@ -14,7 +14,16 @@ from setuptools import setup
 sys.setrecursionlimit(10000)
 
 APP = ['main.py']
-DATA_FILES = []
+DATA_FILES = [
+    ('', [
+        'icons/menubar_idle.png',
+        'icons/menubar_idle@2x.png',
+        'icons/menubar_recording.png',
+        'icons/menubar_recording@2x.png',
+        'icons/menubar_processing.png',
+        'icons/menubar_processing@2x.png'
+    ])
+]
 
 OPTIONS = {
     # Don't emulate command-line arguments
