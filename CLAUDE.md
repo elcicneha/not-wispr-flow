@@ -74,15 +74,23 @@ Toggle + hotkey press            → Stop recording, transcribe
 
 ## Configuration
 
-All config is in `main.py` constants (lines ~108-120):
+**User-facing settings** are in `config.py` (edit this file to customize):
 
 ```python
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
-HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r} # Set of keys that trigger recording
-TOGGLE_KEY = Key.space               # Combine with hotkey for toggle mode
-DEBUG = False                        # Verbose logging
-MIN_RECORDING_DURATION = 0.2         # Reject short recordings (seconds)
-DEBOUNCE_MS = 100                    # Key press debounce (milliseconds)
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Model selection
+HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}  # Set of keys that trigger recording
+TOGGLE_KEY = Key.space                # Combine with hotkey for toggle mode
+DEBUG = False                         # Verbose logging
+```
+
+**Developer/internal constants** remain in `main.py` (technical settings):
+
+```python
+SAMPLE_RATE = 16000              # Whisper's native sample rate
+MIN_RECORDING_DURATION = 0.2     # Reject short recordings (seconds)
+DEBOUNCE_MS = 100                # Key press debounce (milliseconds)
+FLUSH_BUFFER_THRESHOLD_MB = 5    # Buffer overflow threshold
+CONTEXT_CHARS = 200              # Context window for transcription
 ```
 
 `HOTKEY_KEYS` is a **set** — pynput may report `Key.ctrl`, `Key.ctrl_r`, or `Key.ctrl_l` depending on macOS version/keyboard. The `is_hotkey(key)` function checks membership.

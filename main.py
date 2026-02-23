@@ -42,6 +42,11 @@ from AppKit import (
 )
 
 # ============================================================================
+# User Configuration - imported from config.py
+# ============================================================================
+from config import HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG
+
+# ============================================================================
 # Logging Configuration
 # ============================================================================
 
@@ -106,36 +111,18 @@ def setup_logging():
 logger = None
 
 # ============================================================================
-# Configuration Constants
+# Internal Configuration Constants (Developer Settings)
 # ============================================================================
+# These are technical constants that control internal behavior.
+# User-facing settings are in config.py
 
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # HuggingFace repo for mlx-whisper
 SAMPLE_RATE = 16000     # Whisper's native sample rate (Hz)
 CHANNELS = 1            # Mono audio
 DTYPE = 'int16'         # Audio data type for sounddevice
-DEBUG = False            # Set to False for minimal console output
 MIN_RECORDING_DURATION = 0.2  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
 FLUSH_BUFFER_THRESHOLD_MB = 5  # Flush buffer to disk when it exceeds this (crash recovery)
 CONTEXT_CHARS = 200           # Max characters before/after cursor for Whisper context
-
-# ============================================================================
-# HOTKEY CONFIGURATION - Change these to customize your recording keys!
-# ============================================================================
-# HOTKEY_KEYS is a set — pynput may report Key.ctrl, Key.ctrl_r, or Key.ctrl_l
-# depending on macOS version, keyboard layout, and backend. Including all
-# variants that should count as "the hotkey" eliminates mismatches.
-#
-# Examples:
-#   {Key.ctrl, Key.ctrl_r}           - Right Control (default, broadest match)
-#   {Key.ctrl_r}                     - Right Control only (strict)
-#   {Key.ctrl, Key.ctrl_l}           - Left Control
-#   {Key.cmd_r}                      - Right Command (⌘)
-#   {Key.alt_r, Key.alt}             - Right Option/Alt
-#   {Key.f13}                        - F13
-
-HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}  # All key codes that trigger recording
-TOGGLE_KEY = Key.space                # Key to combine with hotkey for toggle mode
 
 
 def is_hotkey(key):
