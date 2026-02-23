@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Whispr Uninstaller
+# Not Wispr Flow Uninstaller
 # Full cleanup: kills processes, removes app, logs, and build artifacts
 #
 
@@ -15,9 +15,9 @@ NC='\033[0m'
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PLIST_FILE="$HOME/Library/LaunchAgents/com.whispr.dictation.plist"
-APP_INSTALL_PATH="/Applications/Whispr.app"
-LOG_DIR="$HOME/Library/Logs/Whispr"
+PLIST_FILE="$HOME/Library/LaunchAgents/com.notwisprflow.dictation.plist"
+APP_INSTALL_PATH="/Applications/Not Wispr Flow.app"
+LOG_DIR="$HOME/Library/Logs/NotWisprFlow"
 
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
@@ -25,15 +25,15 @@ log_info() { echo -e "${YELLOW}[i]${NC} $1"; }
 
 print_header() {
     echo ""
-    echo "Whispr Uninstaller"
-    echo "=================="
+    echo "Not Wispr Flow Uninstaller"
+    echo "=========================="
     echo ""
 }
 
 unload_service() {
     log_info "Checking if service is loaded..."
 
-    if launchctl list 2>/dev/null | grep -q "com.whispr.dictation"; then
+    if launchctl list 2>/dev/null | grep -q "com.notwisprflow.dictation"; then
         log_info "Unloading service..."
         launchctl unload "$PLIST_FILE" 2>/dev/null || true
         sleep 1
@@ -44,14 +44,14 @@ unload_service() {
 }
 
 kill_processes() {
-    log_info "Checking for running Whispr processes..."
+    log_info "Checking for running Not Wispr Flow processes..."
 
-    local whispr_pids
-    whispr_pids=$(pgrep -fx ".*/Whispr\.app/Contents/MacOS/Whispr" 2>/dev/null) || true
-    if [ -n "$whispr_pids" ]; then
-        echo "$whispr_pids" | xargs kill 2>/dev/null || true
+    local app_pids
+    app_pids=$(pgrep -fx ".*/Not Wispr Flow\.app/Contents/MacOS/Not Wispr Flow" 2>/dev/null) || true
+    if [ -n "$app_pids" ]; then
+        echo "$app_pids" | xargs kill 2>/dev/null || true
         sleep 1
-        log_success "Killed running Whispr processes"
+        log_success "Killed running Not Wispr Flow processes"
     else
         log_info "No running processes found"
     fi
@@ -106,7 +106,7 @@ cleanup_build_artifacts() {
 
 print_summary() {
     echo ""
-    echo -e "${GREEN}Whispr has been completely uninstalled${NC}"
+    echo -e "${GREEN}Not Wispr Flow has been completely uninstalled${NC}"
     echo ""
     echo "To reinstall, run:"
     echo "  ./scripts/install_service.sh"

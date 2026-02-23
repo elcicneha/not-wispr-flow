@@ -1,476 +1,195 @@
-# Whispr Clone - Voice Dictation Tool for macOS
+# Not Wispr Flow
 
-A lightweight, offline voice dictation tool for macOS that uses Whisper AI for speech-to-text transcription. Type anywhere using your voice with simple keyboard hotkeys.
+A free, offline voice-to-text tool for **macOS**. Hold a key, speak, release — your words get typed wherever your cursor is. Works in any app.
 
-## Features
+Everything runs locally on your machine. No cloud, no subscription, no data leaving your computer. It uses OpenAI's Whisper model through Apple's MLX framework, so transcription happens on your Mac's GPU.
 
-- **Two Recording Modes:**
-  - **Press-and-Hold**: Hold Right Control to record, release to transcribe
-  - **Toggle/Hands-Free**: Press Right Control + Space to start, Right Control to stop
-
-- **Offline Processing**: Uses faster-whisper for local transcription (no cloud services)
-- **Universal**: Works in any macOS application (TextEdit, VSCode, browsers, etc.)
-- **Fast**: Optimized with int8 quantization for CPU performance
-- **Configurable**: Easy-to-modify settings at the top of the script
-
-## Requirements
-
-- **macOS**: 10.15 (Catalina) or newer
-- **Python**: 3.9 or later
-- **System Dependencies**: PortAudio (via Homebrew)
-- **Architecture**: Supports both Intel (x86_64) and Apple Silicon (ARM64)
-
-## Installation
-
-### 1. Install System Dependencies
-
-```bash
-# Install PortAudio via Homebrew
-brew install portaudio
-```
-
-### 2. Clone the Repository
-
-```bash
-git clone <repository-url>
-cd wispr-flow-copy
-```
-
-### 3. Create Virtual Environment
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 4. Install Python Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-**Note**: On first run, the Whisper model (~150MB) will auto-download to `~/.cache/huggingface/`
-
-## macOS Permissions Setup (CRITICAL)
-
-This application requires **two** permissions to function properly:
-
-### 1. Microphone Access
-
-Required for: Audio recording
-
-**Setup:**
-1. Open **System Preferences** (or **System Settings** on macOS Ventura+)
-2. Navigate to **Security & Privacy** → **Privacy**
-3. Select **Microphone** from the left sidebar
-4. Check the box for **Terminal** (or your IDE if running from VSCode, PyCharm, etc.)
-
-**If using an IDE:**
-- VSCode: Enable for "Code Helper"
-- PyCharm: Enable for "pycharm"
-- Terminal: Enable for "Terminal"
-
-### 2. Accessibility Access
-
-Required for: Typing transcribed text at cursor position
-
-**Setup:**
-1. Open **System Preferences** (or **System Settings**)
-2. Navigate to **Security & Privacy** → **Privacy**
-3. Select **Accessibility** from the left sidebar
-4. Click the lock icon to make changes (enter password)
-5. Check the box for **Terminal** (or your IDE)
-
-**Verification:**
-- If microphone access is denied, the script will fail immediately with an error
-- If accessibility is denied, recording will work but no text will be typed
-
-## Usage
-
-### Running the Application
-
-```bash
-# Activate virtual environment
-source venv/bin/activate
-
-# Run the script
-python3 whispr_clone.py
-```
-
-### Recording Modes
-
-#### Press-and-Hold Mode (Quick Dictation)
-1. Place cursor where you want text to appear
-2. **Press and hold** Right Control key
-3. Speak your text
-4. **Release** Right Control key
-5. Text appears at cursor (1-3 seconds)
-
-**Example:**
-```
-Hold Right Control → "Hello world, this is a test" → Release
-Result: Hello world, this is a test
-```
-
-#### Toggle Mode (Hands-Free)
-1. Place cursor where you want text to appear
-2. **Press Right Control + Space together**
-3. You'll see: "Toggle mode activated - recording started"
-4. Speak your text (hands-free!)
-5. **Press Right Control once** to stop
-6. Text appears at cursor
-
-**Example:**
-```
-Right Control + Space → "This is a longer dictation..." → Right Control
-Result: This is a longer dictation...
-```
-
-### Stopping the Application
-
-Press `Ctrl+C` in the terminal to quit
-
-## Configuration
-
-Edit the constants at the top of [whispr_clone.py](whispr_clone.py):
-
-```python
-WHISPER_MODEL = "base"  # Options: tiny, base, small, medium, large
-SAMPLE_RATE = 16000     # Whisper's native rate (don't change)
-DEBUG = True            # Set to False for minimal console output
-MIN_RECORDING_DURATION = 0.5  # Minimum recording length (seconds)
-DEBOUNCE_MS = 100       # Debounce time for key presses (milliseconds)
-```
-
-### Model Sizes
-
-| Model  | Size   | RAM    | Speed      | Accuracy |
-|--------|--------|--------|------------|----------|
-| tiny   | ~75MB  | ~1GB   | Fastest    | Good     |
-| base   | ~150MB | ~1GB   | Fast       | Better   |
-| small  | ~500MB | ~2GB   | Medium     | Great    |
-| medium | ~1.5GB | ~5GB   | Slower     | Excellent|
-| large  | ~3GB   | ~10GB  | Slowest    | Best     |
-
-**Recommendation**: Start with `base` for a good balance of speed and accuracy.
-
-### Debug Mode
-
-- **DEBUG = True**: Shows detailed logs (recording status, buffer size, timing)
-- **DEBUG = False**: Minimal output (only startup messages and transcriptions)
-
-## Troubleshooting
-
-### Service won't start or isn't working
-
-**Check the logs first:**
-```bash
-# View application logs
-tail -50 ~/Library/Logs/Whispr/whispr.log
-
-# View error logs
-tail -50 ~/Library/Logs/Whispr/stderr.log
-
-# Check service status
-./scripts/check_status.sh
-```
-
-Most issues are related to permissions (microphone or accessibility).
-
-### "Microphone access denied"
-
-**Solution:**
-1. Grant microphone permission in System Preferences → Privacy → Microphone
-2. Restart the application
-3. On first run, macOS will prompt for permission - click "OK"
-
-### "No text appears after dictation"
-
-**Cause**: Accessibility permission not granted
-
-**Solution:**
-1. Grant accessibility permission in System Preferences → Privacy → Accessibility
-2. No need to restart - try dictating again
-
-### "Audio too short, skipping transcription"
-
-**Cause**: Recording was shorter than 0.5 seconds
-
-**Solution:**
-- Hold the key longer while speaking
-- Adjust `MIN_RECORDING_DURATION` in config
-
-### "No speech detected"
-
-**Cause**: Either silent recording or background noise only
-
-**Solution:**
-- Speak closer to microphone
-- Ensure microphone is working (`System Preferences → Sound → Input`)
-- Check input levels while recording
-
-### "Model download fails"
-
-**Cause**: Network issues during first-time model download
-
-**Solution:**
-```bash
-# Manually download model
-python3 -c "from faster_whisper import WhisperModel; WhisperModel('base')"
-
-# Or check internet connection and retry
-```
-
-### Recording works but transcription is slow
-
-**Solutions:**
-- Use a smaller model (`tiny` instead of `small`)
-- Close other applications to free RAM
-- On older Macs, stick with `tiny` or `base` models
-
-### Service installed but dictation doesn't work
-
-**Possible causes:**
-1. Permissions not granted for Python (not Terminal)
-2. Service crashed - check logs
-3. Wrong Python interpreter or virtual environment
-
-**Debug steps:**
-```bash
-# Check if service is actually running
-./scripts/check_status.sh
-
-# View error logs
-tail ~/Library/Logs/Whispr/stderr.log
-
-# Try running in terminal mode first to verify it works
-python3 whispr_clone.py
-
-# If terminal works but service doesn't, reinstall:
-./scripts/uninstall_service.sh
-./scripts/install_service.sh
-```
-
-### Wrong keyboard detected (no Right Control)
-
-**Solution:**
-- Some keyboards lack Right Control
-- Edit `whispr_clone.py` and change hotkey:
-  ```python
-  # Change from Key.ctrl_r to:
-  if key == Key.f13:  # Use F13 key instead
-  ```
-
-## Testing
-
-### Basic Test
-
-```bash
-# Run the application
-python3 whispr_clone.py
-
-# Expected output:
-# Testing microphone access...
-# Microphone access OK
-# Loading Whisper model: base
-# Whisper model loaded: base
-# Whispr Clone is now running!
-```
-
-### Test Press-and-Hold Mode
-
-1. Open TextEdit
-2. Hold Right Control
-3. Say: "Testing press and hold mode"
-4. Release Right Control
-5. **Expected**: Text appears in TextEdit within 2-3 seconds
-
-### Test Toggle Mode
-
-1. Open any text application
-2. Press Right Control + Space together
-3. **Expected console**: "Toggle mode activated - recording started"
-4. Say: "This is hands free mode"
-5. Press Right Control (single press)
-6. **Expected console**: "Recording stopped"
-7. **Expected**: Text appears in application
-
-### Test in Multiple Applications
-
-Test dictation works in:
-- TextEdit (bundled macOS app)
-- Notes (bundled macOS app)
-- VSCode (editor)
-- Terminal (command line)
-- Chrome/Safari (address bar, forms)
-
-## Performance
-
-**Typical Performance (base model on M1 Mac):**
-- Model load time: <1 second (after first download)
-- Transcription latency: 1-2 seconds for 5-second clips
-- Memory usage: ~500MB with base model loaded
-- CPU usage: Spike during transcription, idle otherwise
-
-**Apple Silicon (M1/M2/M3):**
-- Faster transcription due to unified memory
-- Lower power consumption
-
-**Intel Macs:**
-- Use `base` or `tiny` models for best performance
-- Expect 2-3x longer transcription times
-
-## Project Structure
-
-```
-wispr-flow-copy/
-├── whispr_clone.py              # Main application (single file)
-├── requirements.txt             # Python dependencies
-├── README.md                    # This file
-├── .gitignore                   # Git ignore rules
-├── scripts/                     # Background service management
-│   ├── install_service.sh       # Install as LaunchAgent
-│   ├── uninstall_service.sh     # Remove LaunchAgent
-│   ├── check_status.sh          # Show service status
-│   ├── run_background.sh        # Simple background mode
-│   └── stop_background.sh       # Stop background mode
-└── venv/                        # Virtual environment (not tracked)
-```
-
-## How It Works
-
-1. **Keyboard Listener**: `pynput` monitors keyboard events (press/release)
-2. **Audio Recording**: `sounddevice` captures microphone input in real-time
-3. **State Management**: Tracks current mode (hold/toggle) and recording status
-4. **Transcription**: `faster-whisper` converts audio → text using Whisper AI
-5. **Text Output**: `pynput.keyboard.Controller` types text at cursor position
-
-## Running as Background Service
-
-You can run Whispr in the background so you don't need to keep a terminal window open. There are two options:
-
-### Option 1: LaunchAgent (Recommended - Auto-start on Login)
-
-Install Whispr as a macOS background service that starts automatically when you log in:
-
-```bash
-# One-time installation
-cd /path/to/wispr-flow-copy
-./scripts/install_service.sh
-```
-
-**That's it!** Whispr now runs in the background and will auto-start on login. No terminal window needed.
-
-**Check Status:**
-```bash
-./scripts/check_status.sh
-```
-
-**View Logs:**
-```bash
-# Follow logs in real-time
-tail -f ~/Library/Logs/Whispr/whispr.log
-
-# View recent activity
-./scripts/check_status.sh
-```
-
-**Uninstall Service:**
-```bash
-./scripts/uninstall_service.sh
-```
-
-**Manual Control:**
-```bash
-# Stop service
-launchctl unload ~/Library/LaunchAgents/com.whispr.dictation.plist
-
-# Start service
-launchctl load ~/Library/LaunchAgents/com.whispr.dictation.plist
-
-# Check if running
-launchctl list | grep whispr
-```
-
-### Option 2: Simple Background Mode
-
-If you don't need auto-start and just want to run in background temporarily:
-
-```bash
-# Start in background
-./scripts/run_background.sh
-
-# Stop when done
-./scripts/stop_background.sh
-```
-
-### Option 3: Terminal Mode (Current Behavior)
-
-Run directly in terminal as before (still works!):
-
-```bash
-source venv/bin/activate
-python3 whispr_clone.py
-```
-
-## Logging
-
-All modes now write logs to files for debugging and monitoring:
-
-**Log Locations:**
-- Application logs: `~/Library/Logs/Whispr/whispr.log`
-- System output: `~/Library/Logs/Whispr/stdout.log`
-- Errors: `~/Library/Logs/Whispr/stderr.log`
-
-**Log Features:**
-- Automatic rotation (max 10MB per file, keeps 5 backups)
-- Timestamps on all messages
-- Configurable verbosity via `DEBUG` flag in script
-
-**View Logs:**
-```bash
-# Recent activity
-tail -50 ~/Library/Logs/Whispr/whispr.log
-
-# Follow in real-time
-tail -f ~/Library/Logs/Whispr/whispr.log
-
-# Errors only
-grep ERROR ~/Library/Logs/Whispr/whispr.log
-
-# View with status script
-./scripts/check_status.sh
-```
-
-**Note:** When running in terminal mode, you'll see output in both the console AND the log file.
-
-## Contributing
-
-Contributions welcome! Areas for improvement:
-- GPU acceleration support
-- Custom word replacement (e.g., "comma" → ",")
-- Visual feedback (menu bar icon)
-- Multiple language support
-- Streaming transcription
-
-## License
-
-[Add your license here]
-
-## Acknowledgments
-
-- [faster-whisper](https://github.com/guillaumekln/faster-whisper) - Efficient Whisper implementation
-- [OpenAI Whisper](https://github.com/openai/whisper) - Original Whisper model
-- [pynput](https://github.com/moses-palmer/pynput) - Keyboard monitoring and control
-- [sounddevice](https://python-sounddevice.readthedocs.io/) - Audio I/O
-
-## Support
-
-For issues, questions, or suggestions:
-- Open an issue on GitHub
-- Check the Troubleshooting section above
-- Review macOS permissions carefully (most common issue)
+> **This is a macOS-only app.** It relies on macOS-specific system APIs (Accessibility, AppKit, etc.) and Apple's MLX framework for GPU acceleration. It will not run on Windows or Linux.
 
 ---
 
-**Note**: This tool is designed for macOS only. For Windows/Linux support, keyboard handling and permissions would need to be adapted.
+## About this project
+
+This was inspired by [Wispr Flow](https://wisprflow.ai/). I genuinely admire what they've built. This project doesn't come close to the level of quality and features they offer. But this gets the job done for free and runs entirely on your own machine. The tradeoff is it uses some of your RAM (~2-3GB) since the AI model sits in memory while the app is running.
+
+---
+
+## Quick start
+
+You need a Mac with Apple Silicon (M1/M2/M3/M4).
+
+### Setting up your Mac (skip what you already have)
+
+**Install Homebrew** (a package manager for macOS — think of it as an app store for developer tools):
+
+Open the Terminal app (search "Terminal" in Spotlight) and paste:
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+Follow the on-screen instructions. When it's done, close and reopen Terminal.
+
+**Install Python and Git:**
+```bash
+brew install python git portaudio
+```
+This installs Python (the programming language this app is written in), Git (to download the code), and PortAudio (needed for microphone access).
+
+### Installing the app
+
+**Optional:** If you want the code in a specific folder (e.g. Documents, Desktop), open that folder in Finder, right-click on it, and select **"New Terminal at Folder"**. Otherwise, just open Terminal — the code will be downloaded to your home directory by default.
+
+Then paste these commands:
+
+```bash
+git clone <your-repo-url>
+cd not-wispr-flow
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Running it
+
+```bash
+source venv/bin/activate
+python3 main.py
+```
+
+The first run downloads the Whisper model (~1.6GB). After that, startup takes a few seconds.
+
+**Every time you want to use it**, open Terminal and run those two lines (`source venv/bin/activate` then `python3 main.py`). Or set it up as a background service (see the technical section below).
+
+### Grant macOS permissions
+
+macOS will prompt you — say yes to all of them. If it doesn't prompt, go to **System Settings > Privacy & Security** and manually enable these for Terminal (or whatever app you ran the command from):
+
+- **Microphone** — so it can hear you
+- **Accessibility** — so it can type text into other apps
+- **Input Monitoring** — so it can detect the hotkey
+
+If any of these are missing, things will silently not work. This is the #1 issue people run into.
+
+---
+
+## How to use it
+
+Once it's running, click into any app where you want text to appear.
+
+**Press-and-hold** (for quick dictation):
+1. Hold **Right Control**
+2. Speak
+3. Release **Right Control**
+4. Text appears at your cursor
+
+**Toggle mode** (for longer, hands-free dictation):
+1. Press **Right Control + Space** together to start recording
+2. Speak as long as you want
+3. Press **Right Control** again to stop
+4. Text appears at your cursor
+
+To quit, press `Ctrl+C` in the terminal.
+
+---
+
+## Troubleshooting
+
+**Nothing happens when I press the hotkey** — Almost always a permissions issue. Double-check all three permissions (Microphone, Accessibility, Input Monitoring) in System Settings > Privacy & Security.
+
+**I speak but no text appears** — Accessibility permission is probably missing.
+
+**"Audio too short, skipping"** — You released the key too quickly. Hold it longer.
+
+**Transcription is slow** — Try a smaller model (see the customization section below).
+
+**Logs** — Check `~/Library/Logs/NotWisprFlow/notwisprflow.log` if something seems off.
+
+---
+
+## A note about Wispr Flow
+
+Seriously, go check out [Wispr Flow](https://wisprflow.ai). It's a great product. If you want something that just works out of the box with a clean UI and you don't mind paying for it, use that instead. This project exists for people who want a free, local alternative and don't mind a little terminal work.
+
+---
+
+# Technical details
+
+Everything below is for folks who want to customize, understand, or contribute to the project.
+
+## Changing the Whisper model
+
+Open [main.py](main.py) and find this line near the top (line 112):
+
+```python
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+```
+
+Replace it with any mlx-whisper compatible model from [HuggingFace's mlx-community](https://huggingface.co/mlx-community). Some options:
+
+| Model | Download size | RAM usage | Tradeoff |
+|-------|--------------|-----------|----------|
+| `mlx-community/whisper-tiny` | ~75MB | ~1GB | Fastest, least accurate |
+| `mlx-community/whisper-base` | ~150MB | ~1GB | Quick and decent |
+| `mlx-community/whisper-small` | ~500MB | ~1.5GB | Good middle ground |
+| `mlx-community/whisper-large-v3-turbo` | ~1.6GB | ~2.5GB | **Default** — best speed/accuracy tradeoff |
+| `mlx-community/whisper-large-v3` | ~3GB | ~4GB | Most accurate, slower |
+
+Restart the app after changing the model. It'll download the new one on first run.
+
+## Changing the hotkey
+
+If your keyboard doesn't have Right Control or you want a different trigger, find this line (line 137):
+
+```python
+HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}
+```
+
+Some alternatives:
+```python
+HOTKEY_KEYS = {Key.cmd_r}              # Right Command
+HOTKEY_KEYS = {Key.alt_r, Key.alt}     # Right Option
+HOTKEY_KEYS = {Key.f13}                # F13 key
+```
+
+## How it works
+
+1. A keyboard listener (pynput) watches for the hotkey press/release
+2. While the key is held, audio is captured from your microphone (sounddevice)
+3. On release, the audio buffer is passed to mlx-whisper for transcription on the GPU
+4. The transcribed text is typed at the cursor position using macOS Accessibility APIs
+
+The whole app is a single Python file ([main.py](main.py)). The menu bar icon runs through macOS's AppKit via PyObjC.
+
+## Running as a background service
+
+If you don't want to keep a terminal window open:
+
+```bash
+# Install as a macOS LaunchAgent (auto-starts on login)
+./scripts/install_service.sh
+
+# Check if it's running
+./scripts/check_status.sh
+
+# Uninstall
+./scripts/uninstall_service.sh
+```
+
+## Project structure
+
+```
+main.py                  — The entire app (single file)
+requirements.txt         — Python dependencies
+setup.py                 — py2app config for building a .app bundle
+scripts/
+  install_service.sh     — Build, sign, and install to /Applications
+  uninstall_service.sh   — Remove the app and LaunchAgent
+  check_status.sh        — Show whether the service is running
+```
+
+## Acknowledgments
+
+- [Wispr Flow](https://wisprflow.ai) — the inspiration
+- [OpenAI Whisper](https://github.com/openai/whisper) — the model that makes this possible
+- [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) — GPU-accelerated Whisper for Apple Silicon
+- [pynput](https://github.com/moses-palmer/pynput) — keyboard monitoring
+- [sounddevice](https://python-sounddevice.readthedocs.io/) — audio capture

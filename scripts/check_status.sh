@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Whispr Service Status Checker
+# Not Wispr Flow Service Status Checker
 # Displays current service status, logs, and diagnostics
 #
 
@@ -12,20 +12,20 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Paths
-LOG_FILE="$HOME/Library/Logs/Whispr/whispr.log"
-STDERR_LOG="$HOME/Library/Logs/Whispr/stderr.log"
+LOG_FILE="$HOME/Library/Logs/NotWisprFlow/notwisprflow.log"
+STDERR_LOG="$HOME/Library/Logs/NotWisprFlow/stderr.log"
 
 print_header() {
     echo ""
-    echo "Whispr Service Status"
-    echo "===================="
+    echo "Not Wispr Flow Service Status"
+    echo "============================="
     echo ""
 }
 
 check_service_status() {
-    if launchctl list 2>/dev/null | grep -q "com.whispr.dictation"; then
+    if launchctl list 2>/dev/null | grep -q "com.notwisprflow.dictation"; then
         # Get PID
-        PID=$(launchctl list 2>/dev/null | grep "com.whispr.dictation" | awk '{print $1}')
+        PID=$(launchctl list 2>/dev/null | grep "com.notwisprflow.dictation" | awk '{print $1}')
 
         echo -e "Status:      ${GREEN}Running ✓${NC}"
         echo -e "Process ID:  $PID"
@@ -45,10 +45,10 @@ check_service_status() {
         echo -e "Status:      ${RED}Not Running ✗${NC}"
 
         # Check if plist exists
-        if [ -f "$HOME/Library/LaunchAgents/com.whispr.dictation.plist" ]; then
+        if [ -f "$HOME/Library/LaunchAgents/com.notwisprflow.dictation.plist" ]; then
             echo -e "             ${YELLOW}(Installed but not loaded)${NC}"
             echo ""
-            echo "To start: launchctl load ~/Library/LaunchAgents/com.whispr.dictation.plist"
+            echo "To start: launchctl load ~/Library/LaunchAgents/com.notwisprflow.dictation.plist"
         else
             echo -e "             ${YELLOW}(Not installed)${NC}"
             echo ""

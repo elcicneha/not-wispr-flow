@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-setup.py for building Whispr macOS .app bundle with py2app
+setup.py for building Not Wispr Flow macOS .app bundle with py2app
 
-This configuration packages the Whispr voice dictation tool as a standalone
+This configuration packages the Not Wispr Flow voice dictation tool as a standalone
 macOS application with all dependencies bundled, including native libraries.
 """
 
@@ -13,7 +13,7 @@ from setuptools import setup
 # (needed for complex packages like scipy, numpy, etc.)
 sys.setrecursionlimit(10000)
 
-APP = ['whispr_clone.py']
+APP = ['main.py']
 DATA_FILES = []
 
 OPTIONS = {
@@ -21,21 +21,21 @@ OPTIONS = {
     'argv_emulation': False,
 
     # App icon
-    'iconfile': 'icons/whispr_icon_1.icns',
+    'iconfile': 'icons/icon_1.icns',
 
     # App metadata and permissions
     'plist': {
-        'CFBundleName': 'Whispr',
-        'CFBundleDisplayName': 'Whispr Voice Dictation',
-        'CFBundleIdentifier': 'com.whispr.dictation',
+        'CFBundleName': 'Not Wispr Flow',
+        'CFBundleDisplayName': 'Not Wispr Flow Voice Dictation',
+        'CFBundleIdentifier': 'com.notwisprflow.dictation',
         'CFBundleVersion': '1.0.0',
         'CFBundleShortVersionString': '1.0.0',
 
         # Permission descriptions (shown in permission prompts)
         'NSMicrophoneUsageDescription':
-            'Whispr needs microphone access to record your voice for dictation.',
+            'Not Wispr Flow needs microphone access to record your voice for dictation.',
         'NSAppleEventsUsageDescription':
-            'Whispr needs to control keyboard input to type transcribed text.',
+            'Not Wispr Flow needs to control keyboard input to type transcribed text.',
 
         # Run as background agent (no Dock icon)
         'LSUIElement': True,
@@ -98,7 +98,7 @@ OPTIONS = {
 }
 
 setup(
-    name='Whispr',
+    name='Not Wispr Flow',
     app=APP,
     data_files=DATA_FILES,
     options={'py2app': OPTIONS},

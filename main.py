@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Whispr Clone - Voice Dictation Tool for macOS
+Not Wispr Flow - Voice Dictation Tool for macOS
 
 A background script that provides voice dictation with two recording modes:
 1. Press-and-Hold: Hold Right Control to record, release to transcribe
@@ -53,7 +53,7 @@ def setup_logging():
         logging.Logger: Configured logger instance
     """
     # Create logger
-    logger = logging.getLogger('whispr')
+    logger = logging.getLogger('notwisprflow')
 
     # Determine log level from DEBUG constant
     log_level = logging.DEBUG if DEBUG else logging.INFO
@@ -78,12 +78,12 @@ def setup_logging():
     # File handler (always enabled)
     try:
         # Create log directory with restricted permissions (transcriptions may contain sensitive data)
-        log_dir = Path.home() / 'Library' / 'Logs' / 'Whispr'
+        log_dir = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'
         log_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(log_dir, 0o700)
 
         # Create rotating file handler (10MB per file, keep 5 files)
-        log_file = log_dir / 'whispr.log'
+        log_file = log_dir / 'notwisprflow.log'
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
             maxBytes=10 * 1024 * 1024,  # 10 MB
@@ -1119,7 +1119,7 @@ def check_accessibility_permission():
 
     logger.error("=" * 60)
     logger.error("FATAL: Accessibility permission not granted after 30 seconds")
-    logger.error("Please enable 'Whispr' in System Settings > Accessibility and restart")
+    logger.error("Please enable 'Not Wispr Flow' in System Settings > Accessibility and restart")
     logger.error("=" * 60)
     sys.exit(0)  # Clean exit so KeepAlive does NOT restart
 
@@ -1128,9 +1128,9 @@ def check_accessibility_permission():
 # Instance Lock
 # ============================================================================
 
-PID_FILE = Path.home() / 'Library' / 'Logs' / 'Whispr' / 'whispr.pid'
-OVERFLOW_DIR = Path.home() / 'Library' / 'Logs' / 'Whispr'  # Reuses log dir (already 0o700)
-OVERFLOW_PREFIX = "whispr_overflow_"
+PID_FILE = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow' / 'notwisprflow.pid'
+OVERFLOW_DIR = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'  # Reuses log dir (already 0o700)
+OVERFLOW_PREFIX = "notwisprflow_overflow_"
 STATS_FILE = Path(__file__).resolve().parent / 'recording_stats.jsonl'
 
 
@@ -1234,7 +1234,7 @@ def setup_menu_bar(shutdown_event):
 
     # Quit
     quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Quit Whispr", "quit:", "q"  # Cmd+Q
+        "Quit Not Wispr Flow", "quit:", "q"  # Cmd+Q
     )
     quit_item.setTarget_(delegate)
     menu.addItem_(quit_item)
@@ -1304,12 +1304,12 @@ def main():
     # Prevent duplicate instances
     pid_lock = acquire_pid_lock()
     if pid_lock is None:
-        logger.warning("Another Whispr instance is already running. Exiting.")
+        logger.warning("Another Not Wispr Flow instance is already running. Exiting.")
         sys.exit(0)
     atexit.register(lambda: pid_lock.close())
 
     logger.info("=" * 60)
-    logger.info("Whispr Clone - Voice Dictation Tool")
+    logger.info("Not Wispr Flow - Voice Dictation Tool")
     logger.info("=" * 60)
     logger.info("")
 
@@ -1328,7 +1328,7 @@ def main():
 
     # Print usage instructions
     logger.info("=" * 60)
-    logger.info("Whispr Clone is now running!")
+    logger.info("Not Wispr Flow is now running!")
     logger.info("=" * 60)
     logger.info("")
     hotkey_name = ", ".join(str(k).replace("Key.", "") for k in HOTKEY_KEYS)
@@ -1356,7 +1356,7 @@ def main():
 
     # Register cleanup for app termination
     def cleanup():
-        logger.info("Shutting down Whispr Clone...")
+        logger.info("Shutting down Not Wispr Flow...")
         listener.stop()
         with state.lock:
             if state.is_recording:

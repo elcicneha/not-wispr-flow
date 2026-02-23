@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Whispr App Installer
-# Builds and installs Whispr.app to /Applications
+# Not Wispr Flow App Installer
+# Builds and installs Not Wispr Flow.app to /Applications
 #
 
 set -e  # Exit on error
@@ -18,10 +18,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
 SETUP_PY="$PROJECT_DIR/setup.py"
-APP_BUNDLE="$PROJECT_DIR/dist/Whispr.app"
-APP_INSTALL_PATH="/Applications/Whispr.app"
-LOG_DIR="$HOME/Library/Logs/Whispr"
-CODESIGN_IDENTITY="Whispr Dev"
+APP_BUNDLE="$PROJECT_DIR/dist/Not Wispr Flow.app"
+APP_INSTALL_PATH="/Applications/Not Wispr Flow.app"
+LOG_DIR="$HOME/Library/Logs/NotWisprFlow"
+CODESIGN_IDENTITY="Not Wispr Flow Dev"
 
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -31,8 +31,8 @@ log_warning() { echo -e "${YELLOW}[!]${NC} $1"; }
 
 print_header() {
     echo ""
-    echo "Whispr App Installer"
-    echo "===================="
+    echo "Not Wispr Flow App Installer"
+    echo "============================"
     echo ""
 }
 
@@ -68,20 +68,20 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Kill any running Whispr processes before reinstalling
-    local whispr_pids
-    whispr_pids=$(pgrep -fx ".*/Whispr\.app/Contents/MacOS/Whispr" 2>/dev/null) || true
-    if [ -n "$whispr_pids" ]; then
-        log_info "Stopping running Whispr processes..."
-        echo "$whispr_pids" | xargs kill 2>/dev/null || true
+    # Kill any running Not Wispr Flow processes before reinstalling
+    local app_pids
+    app_pids=$(pgrep -fx ".*/Not Wispr Flow\.app/Contents/MacOS/Not Wispr Flow" 2>/dev/null) || true
+    if [ -n "$app_pids" ]; then
+        log_info "Stopping running Not Wispr Flow processes..."
+        echo "$app_pids" | xargs kill 2>/dev/null || true
         sleep 1
     fi
 
     # Remove stale LaunchAgent if it exists
-    if [ -f "$HOME/Library/LaunchAgents/com.whispr.dictation.plist" ]; then
+    if [ -f "$HOME/Library/LaunchAgents/com.notwisprflow.dictation.plist" ]; then
         log_info "Removing old LaunchAgent..."
-        launchctl unload "$HOME/Library/LaunchAgents/com.whispr.dictation.plist" 2>/dev/null || true
-        rm -f "$HOME/Library/LaunchAgents/com.whispr.dictation.plist"
+        launchctl unload "$HOME/Library/LaunchAgents/com.notwisprflow.dictation.plist" 2>/dev/null || true
+        rm -f "$HOME/Library/LaunchAgents/com.notwisprflow.dictation.plist"
     fi
 
     log_success "Prerequisites check passed"
@@ -153,23 +153,23 @@ install_app() {
 print_summary() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${GREEN}Whispr has been installed!${NC}"
+    echo -e "${GREEN}Not Wispr Flow has been installed!${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo -e "${YELLOW}IMPORTANT: Grant these permissions to 'Whispr' (first install only):${NC}"
-    echo "  1. System Settings → Privacy & Security → Microphone → Enable 'Whispr'"
-    echo "  2. System Settings → Privacy & Security → Accessibility → Enable 'Whispr'"
-    echo "  3. System Settings → Privacy & Security → Input Monitoring → Enable 'Whispr'"
+    echo -e "${YELLOW}IMPORTANT: Grant these permissions to 'Not Wispr Flow' (first install only):${NC}"
+    echo "  1. System Settings → Privacy & Security → Microphone → Enable 'Not Wispr Flow'"
+    echo "  2. System Settings → Privacy & Security → Accessibility → Enable 'Not Wispr Flow'"
+    echo "  3. System Settings → Privacy & Security → Input Monitoring → Enable 'Not Wispr Flow'"
     echo ""
     echo "  Permissions persist across rebuilds when signed with '$CODESIGN_IDENTITY' certificate."
     echo ""
     echo "How to use:"
-    echo "  • Start: Open /Applications/Whispr.app (or use Spotlight)"
+    echo "  • Start: Open '/Applications/Not Wispr Flow.app' (or use Spotlight)"
     echo "  • Running: Look for the microphone icon in the menu bar"
-    echo "  • Stop: Click the menu bar icon → Quit Whispr"
+    echo "  • Stop: Click the menu bar icon → Quit Not Wispr Flow"
     echo ""
     echo "Log files:"
-    echo "  • Application: $LOG_DIR/whispr.log"
+    echo "  • Application: $LOG_DIR/notwisprflow.log"
     echo ""
     echo "Uninstall: $SCRIPT_DIR/uninstall_service.sh"
     echo ""

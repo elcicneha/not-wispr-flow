@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_PATH="$PROJECT_DIR/dist/Whispr.app"
+APP_PATH="$PROJECT_DIR/dist/Not Wispr Flow.app"
 
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -23,8 +23,8 @@ log_error() { echo -e "${RED}[✗]${NC} $1"; }
 log_info() { echo -e "${YELLOW}[i]${NC} $1"; }
 
 echo ""
-echo "Whispr Bundle Verification"
-echo "==========================="
+echo "Not Wispr Flow Bundle Verification"
+echo "==================================="
 echo ""
 log_info "Checking bundle at: $APP_PATH"
 echo ""
@@ -37,8 +37,8 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 
 # Check for main executable
-if [ -f "$APP_PATH/Contents/MacOS/Whispr" ]; then
-    log_success "Found main executable: Whispr"
+if [ -f "$APP_PATH/Contents/MacOS/Not Wispr Flow" ]; then
+    log_success "Found main executable: Not Wispr Flow"
 else
     log_error "Missing main executable"
     exit 1
@@ -129,6 +129,6 @@ echo -e "${GREEN}Bundle verification passed!${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Next steps:"
-echo "  • Test the app: ./dist/Whispr.app/Contents/MacOS/Whispr"
+echo "  • Test the app: ./dist/Not Wispr Flow.app/Contents/MacOS/Not Wispr Flow"
 echo "  • Or install as service: ./scripts/install_service.sh"
 echo ""
