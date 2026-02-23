@@ -921,6 +921,7 @@ def setup_menu_bar(shutdown_event):
     delegate.shutdown_event = shutdown_event
 
     menu = NSMenu.alloc().init()
+    menu.setMinimumWidth_(180)  # Set minimum width for the menu dropdown
 
     # Retype Last — grayed out when no transcription available
     retype_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
