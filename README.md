@@ -87,7 +87,9 @@ Run this script to automatically create a self-signed code signing certificate:
 
 You'll be prompted to enter your macOS login password once. The script handles everything else automatically via command line.
 
-**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. The certificate is created locally and never leaves your computer.
+**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. This creates a local certificate so permissions persist. The certificate never leaves your computer.
+
+**Important:** The install script requires this certificate. If you skip this step, the installation will fail.
 
 **Not comfortable with this?** Use Option A instead — no certificate needed.
 

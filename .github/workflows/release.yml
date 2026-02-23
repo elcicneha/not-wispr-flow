@@ -1,0 +1,97 @@
+name: Build and Release
+
+# This workflow automatically builds your app and creates a DMG
+# whenever you create a new release on GitHub
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:  # Allows manual triggering from GitHub Actions tab
+
+jobs:
+  build:
+    runs-on: macos-latest  # Uses GitHub's Mac computer to build
+
+    steps:
+      # Step 1: Download your code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Step 3: Install system dependencies
+      - name: Install system dependencies
+        run: |
+          brew install portaudio
+
+      # Step 4: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 5: Create self-signed certificate for code signing
+      - name: Create code signing certificate
+        run: |
+          # Create a keychain for the certificate
+          security create-keychain -p actions temp.keychain
+          security default-keychain -s temp.keychain
+          security unlock-keychain -p actions temp.keychain
+          security set-keychain-settings -t 3600 -u temp.keychain
+
+          # Create a self-signed certificate
+          security add-certificates -k temp.keychain scripts/create_certificate.sh || true
+
+          # Run the certificate creation script
+          ./scripts/create_certificate.sh
+
+      # Step 6: Build the .app bundle
+      - name: Build app
+        run: |
+          python3 setup.py py2app
+
+      # Step 7: Sign the app
+      - name: Sign app
+        run: |
+          codesign --force --deep --sign "Not Wispr Flow Dev" "dist/Not Wispr Flow.app" || true
+
+      # Step 8: Create DMG
+      - name: Create DMG
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          ./scripts/create_dmg.sh "$VERSION"
+
+      # Step 9: Upload DMG to the release
+      - name: Upload DMG to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/NotWisprFlow-${{ github.event.release.tag_name }}.dmg
+          asset_name: NotWisprFlow-${{ github.event.release.tag_name }}.dmg
+          asset_content_type: application/x-apple-diskimage
+
+      # Step 10: Calculate SHA256 for Homebrew
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          SHA256=$(shasum -a 256 dist/NotWisprFlow-*.dmg | awk '{print $1}')
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "SHA256: $SHA256"
+
+      # Step 11: Comment on release with SHA256 (for Homebrew cask)
+      - name: Comment SHA256 on release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.payload.release.id,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### 🍺 Homebrew Cask Update\n\nSHA256: \`${{ steps.sha.outputs.sha256 }}\`\n\nUpdate the cask file with this SHA256 hash.`
+            })
