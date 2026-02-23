@@ -34,32 +34,17 @@ jobs:
           python3 -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Step 5: Create self-signed certificate for code signing
-      - name: Create code signing certificate
-        run: |
-          # Create a keychain for the certificate
-          security create-keychain -p actions temp.keychain
-          security default-keychain -s temp.keychain
-          security unlock-keychain -p actions temp.keychain
-          security set-keychain-settings -t 3600 -u temp.keychain
-
-          # Create a self-signed certificate
-          security add-certificates -k temp.keychain scripts/create_certificate.sh || true
-
-          # Run the certificate creation script
-          ./scripts/create_certificate.sh
-
-      # Step 6: Build the .app bundle
+      # Step 5: Build the .app bundle
       - name: Build app
         run: |
           python3 setup.py py2app
 
-      # Step 7: Sign the app
+      # Step 6: Ad-hoc sign the app (no certificate needed)
       - name: Sign app
         run: |
-          codesign --force --deep --sign "Not Wispr Flow Dev" "dist/Not Wispr Flow.app" || true
+          codesign --force --deep --sign - "dist/Not Wispr Flow.app" || true
 
-      # Step 8: Create DMG
+      # Step 7: Create DMG
       - name: Create DMG
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
