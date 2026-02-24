@@ -2,7 +2,7 @@ cask "not-wispr-flow" do
   version "1.0.1"  # UPDATE THIS with each release
   sha256 "f5e8623f48746ae889e1836a5dbfc40494d7814b5ea0d196ccaa20708b0a7f6c"  # UPDATE THIS with each release (GitHub Actions will provide this)
 
-  url "https://github.com/elcicneha/not-wispr-flow/releases/download/v#{version}/NotWisprFlow-v#{version}.dmg"
+  url "https://github.com/elcicneha/not-wispr-flow/releases/download/v#{version}/NotWisprFlow-#{version}.dmg"
   name "Not Wispr Flow"
   desc "Free, offline voice-to-text for macOS"
   homepage "https://github.com/elcicneha/not-wispr-flow"
