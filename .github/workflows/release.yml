@@ -46,6 +46,7 @@ jobs:
 
       # Step 7: Create DMG
       - name: Create DMG
+        id: create_dmg
         run: |
           # Extract version from tag if triggered by release, otherwise use 1.0.0
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -57,6 +58,7 @@ jobs:
             VERSION="1.0.0"
           fi
           echo "Building DMG with version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           ./scripts/create_dmg.sh "$VERSION"
 
       # Step 8: Upload DMG to the release (only if triggered by release)
@@ -67,9 +69,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/NotWisprFlow-${{ github.event.release.tag_name }}.dmg
-          asset_name: NotWisprFlow-${{ github.event.release.tag_name }}.dmg
+          asset_path: ./dist/NotWisprFlow-${{ steps.create_dmg.outputs.version }}.dmg
+          asset_name: NotWisprFlow-${{ steps.create_dmg.outputs.version }}.dmg
           asset_content_type: application/x-apple-diskimage
+
+      # Step 9: Save DMG as artifact (backup in case upload fails)
+      - name: Save DMG as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotWisprFlow-DMG
+          path: dist/NotWisprFlow-*.dmg
+          retention-days: 7
 
       # Step 10: Calculate SHA256 for Homebrew
       - name: Calculate SHA256
@@ -78,16 +88,31 @@ jobs:
           SHA256=$(shasum -a 256 dist/NotWisprFlow-*.dmg | awk '{print $1}')
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
           echo "SHA256: $SHA256"
+          echo ""
+          echo "============================================"
+          echo "📋 COPY THIS SHA256 FOR HOMEBREW:"
+          echo "$SHA256"
+          echo "============================================"
 
-      # Step 10: Comment on release with SHA256 (for Homebrew cask)
-      - name: Comment SHA256 on release
+      # Step 11: Update release with SHA256 (for Homebrew cask)
+      - name: Add SHA256 to release notes
         if: github.event_name == 'release'
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.createComment({
-              issue_number: context.payload.release.id,
+            const release = await github.rest.repos.getRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### 🍺 Homebrew Cask Update\n\nSHA256: \`${{ steps.sha.outputs.sha256 }}\`\n\nUpdate the cask file with this SHA256 hash.`
-            })
+              release_id: context.payload.release.id
+            });
+
+            const existingBody = release.data.body || '';
+            const sha256Section = '\n\n---\n\n### 🍺 Homebrew Cask\n\nSHA256: `${{ steps.sha.outputs.sha256 }}`\n\nUse this hash when updating the Homebrew cask formula.';
+            const newBody = existingBody + sha256Section;
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id,
+              body: newBody
+            });
