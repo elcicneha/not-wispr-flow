@@ -18,103 +18,68 @@ But this gets the job done for free and runs entirely on your own machine. The t
 
 ---
 
-## Setup
+## Installation
 
-**Step 1: Install Homebrew** (skip if you already have it)
+### Option 1: Homebrew (Recommended - Easiest)
 
-Open Terminal (search "Terminal" in Spotlight) and paste:
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-Follow the instructions, then close and reopen Terminal.
-
-**Step 2: Install required software**
-```bash
-brew install python git portaudio
+brew tap elcicneha/tap
+brew install --cask not-wispr-flow
 ```
 
-**Step 3: Download the code**
+### Option 2: Download DMG
 
-Want the code in a specific folder (like Documents or Desktop)? Open that folder in Finder, right-click on the folder, and select **New Terminal at Folder**. Otherwise, just use the Terminal you already have open.
+1. Download the latest release: **[Releases Page](https://github.com/elcicneha/not-wispr-flow/releases)**
+2. Open the `.dmg` file
+3. Drag "Not Wispr Flow" to Applications folder
+4. **First time only**: Right-click the app and select "Open" (this bypasses macOS security for unsigned apps)
+5. Click "Open" in the dialog
 
-Then paste:
+### First Launch Setup
+
+Grant these permissions in **System Settings → Privacy & Security**:
+- Microphone
+- Accessibility
+- Input Monitoring
+
+**That's it!** Launch "Not Wispr Flow" from Applications or Spotlight.
+
+---
+
+## For Developers: Build From Source
+
+**Setup:**
 ```bash
+# Clone the repository
 git clone https://github.com/elcicneha/not-wispr-flow.git
 cd not-wispr-flow
-```
 
-**Step 4: Set up the environment**
-```bash
+# Install system dependencies
+brew install python portaudio
+
+# Set up Python environment
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Done! Now pick how you want to run it:
-
----
-
-## Pick one: Terminal or Mac App
-
-### A) Terminal Method (Simpler setup, but you run commands each time)
-
-**Every time you want to use the app:**
-
-1. Open Terminal at the folder where you have the code. Or if you have the code in the default folder, just open Terminal and paste:
-```bash
-cd ~/not-wispr-flow
-```
-2. Paste these commands:
+**Run in Terminal:**
 ```bash
 source venv/bin/activate
 python3 main.py
 ```
-3. Keep Terminal open while using the app
-4. When done, press `Ctrl+C` in Terminal to stop
+Grant permissions for Terminal in System Settings.
 
-**Grant permissions (first time only):** System Settings → Privacy & Security → Enable these for **Terminal**: Microphone, Accessibility, Input Monitoring
-
----
-
-### B) Mac App Method (One-time setup, then launch like any app)
-
-**Step 1: Create certificate (one-time)**
-
-Run this script to automatically create a self-signed code signing certificate:
+**Or build as .app:**
 ```bash
+# Create certificate (one-time)
 ./scripts/create_certificate.sh
-```
 
-You'll be prompted to enter your macOS login password once. The script handles everything else automatically via command line.
-
-**Why a certificate?** macOS ties permissions to an app's signature. Without a certificate, you'd need to re-grant permissions after every update. This creates a local certificate so permissions persist. The certificate never leaves your computer.
-
-**Important:** The install script requires this certificate. If you skip this step, the installation will fail.
-
-**Not comfortable with this?** Use Option A instead — no certificate needed.
-
-**Step 2: Install the app**
-```bash
-cd ~/not-wispr-flow
+# Build and install
 ./scripts/install_service.sh
 ```
-This takes a minute or two.
 
-**Step 2: Launch the app**
-
-Open "Not Wispr Flow" from Spotlight or your Applications folder. You'll see the icon in your menu bar (top-right).
-
-**Step 4: Grant permissions (first time only)**
-
-System Settings → Privacy & Security → Enable these for **"Not Wispr Flow"**: Microphone, Accessibility, Input Monitoring
-
-**To stop the app:** Click the menu bar icon → Quit
-
-**To uninstall:**
-```bash
-cd ~/not-wispr-flow
-./scripts/uninstall_service.sh
-```
+Grant permissions for "Not Wispr Flow" in System Settings.
 
 ---
 
@@ -137,17 +102,15 @@ cd ~/not-wispr-flow
 
 ## Customization
 
-Edit [config.py](config.py) to change the Whisper model or hotkeys, then rebuild:
-```bash
-./scripts/install_service.sh  # if using Mac App
-# or just restart if using Terminal method
-```
+**Note:** Customization requires building from source (see "For Developers" section above).
 
-**Available options:**
+Edit [config.py](config.py) to change:
 - **Whisper models:** `whisper-large-v3-turbo` (default), `whisper-small`, `whisper-base`
-- **Hotkeys:** Control key (default), Function key (`{Key.f13}`), Command key (`{Key.cmd, Key.cmd_r}`), Option key (`{Key.alt, Key.alt_r}`), F13, etc.
+- **Hotkeys:** Control key (default), Function key, Command key, Option key, etc.
 
-> **Note:** I'm planning to add a GUI for hotkey configuration in the future. For now, editing the config file is the only way to change hotkeys.
+Then rebuild: `./scripts/install_service.sh`
+
+> A GUI for configuration is planned for future releases.
 
 ---
 

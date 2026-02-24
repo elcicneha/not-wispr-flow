@@ -41,12 +41,46 @@ jobs:
         run: |
           python3 setup.py py2app
 
-      # Step 6: Ad-hoc sign the app (no certificate needed)
+      # Step 6: Fix MLX library rpaths (required for MLX to load correctly)
+      - name: Fix MLX library rpaths
+        run: |
+          # Detect Python version
+          PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          echo "Python version: $PYTHON_VERSION"
+
+          # Paths
+          MLX_CORE_SO="dist/Not Wispr Flow.app/Contents/Resources/lib/python${PYTHON_VERSION}/lib-dynload/mlx/core.so"
+          FRAMEWORKS_DIR="dist/Not Wispr Flow.app/Contents/Frameworks"
+
+          # Fix rpath so core.so can find libmlx.dylib in Frameworks directory
+          if [ -f "$MLX_CORE_SO" ]; then
+            echo "Fixing rpath for mlx/core.so..."
+            # core.so is 5 levels deep from Contents: mlx -> lib-dynload -> python3.X -> lib -> Resources -> Contents
+            install_name_tool -add_rpath "@loader_path/../../../../../Frameworks" "$MLX_CORE_SO"
+            echo "✓ Fixed rpath for mlx/core.so"
+          else
+            echo "⚠️  Warning: mlx/core.so not found at $MLX_CORE_SO"
+            exit 1
+          fi
+
+          # Move mlx.metallib to Frameworks (must be colocated with libmlx.dylib)
+          METALLIB_SOURCE="dist/Not Wispr Flow.app/Contents/Resources/mlx.metallib"
+          METALLIB_DEST="$FRAMEWORKS_DIR/mlx.metallib"
+
+          if [ -f "$METALLIB_SOURCE" ]; then
+            echo "Moving mlx.metallib to Frameworks..."
+            mv "$METALLIB_SOURCE" "$METALLIB_DEST"
+            echo "✓ Moved mlx.metallib to Frameworks"
+          else
+            echo "⚠️  Warning: mlx.metallib not found at $METALLIB_SOURCE"
+          fi
+
+      # Step 7: Ad-hoc sign the app (no certificate needed)
       - name: Sign app
         run: |
           codesign --force --deep --sign - "dist/Not Wispr Flow.app" || true
 
-      # Step 7: Create DMG
+      # Step 8: Create DMG
       - name: Create DMG
         id: create_dmg
         run: |
@@ -61,7 +95,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           ./scripts/create_dmg.sh "$VERSION"
 
-      # Step 8: Upload DMG to the release (only if triggered by release)
+      # Step 9: Upload DMG to the release (only if triggered by release)
       - name: Upload DMG to release
         if: github.event_name == 'release'
         uses: actions/upload-release-asset@v1
@@ -73,7 +107,7 @@ jobs:
           asset_name: NotWisprFlow-${{ steps.create_dmg.outputs.version }}.dmg
           asset_content_type: application/x-apple-diskimage
 
-      # Step 9: Save DMG as artifact (backup in case upload fails)
+      # Step 10: Save DMG as artifact (backup in case upload fails)
       - name: Save DMG as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -81,7 +115,7 @@ jobs:
           path: dist/NotWisprFlow-*.dmg
           retention-days: 7
 
-      # Step 10: Calculate SHA256 for Homebrew
+      # Step 11: Calculate SHA256 for Homebrew
       - name: Calculate SHA256
         id: sha
         run: |
@@ -94,7 +128,7 @@ jobs:
           echo "$SHA256"
           echo "============================================"
 
-      # Step 11: Update release with SHA256 (for Homebrew cask)
+      # Step 12: Update release with SHA256 (for Homebrew cask)
       - name: Add SHA256 to release notes
         if: github.event_name == 'release'
         uses: actions/github-script@v7

@@ -23,6 +23,10 @@ APP_INSTALL_PATH="/Applications/Not Wispr Flow.app"
 LOG_DIR="$HOME/Library/Logs/NotWisprFlow"
 CODESIGN_IDENTITY="Not Wispr Flow Dev"
 
+# Detect Python version dynamically (works with any Python 3.x)
+# This will be set after venv is verified in check_prerequisites
+PYTHON_VERSION=""
+
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
@@ -46,6 +50,10 @@ check_prerequisites() {
         exit 1
     fi
     log_success "Found virtual environment"
+
+    # Detect Python version (e.g., "3.14", "3.11")
+    PYTHON_VERSION=$("$VENV_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    log_success "Detected Python version: $PYTHON_VERSION"
 
     # Check setup.py
     if [ ! -f "$SETUP_PY" ]; then
@@ -115,7 +123,7 @@ build_app_bundle() {
 
     # Fix MLX library rpaths
     log_info "Fixing MLX library rpaths..."
-    local mlx_core_so="$APP_BUNDLE/Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so"
+    local mlx_core_so="$APP_BUNDLE/Contents/Resources/lib/python$PYTHON_VERSION/lib-dynload/mlx/core.so"
     local frameworks_dir="$APP_BUNDLE/Contents/Frameworks"
 
     if [ -f "$mlx_core_so" ]; then
@@ -163,7 +171,7 @@ install_app() {
     cp -R "$APP_BUNDLE" "$APP_INSTALL_PATH"
 
     # Sign mlx/core.so individually (install_name_tool invalidated its signature)
-    local mlx_core_so="$APP_INSTALL_PATH/Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so"
+    local mlx_core_so="$APP_INSTALL_PATH/Contents/Resources/lib/python$PYTHON_VERSION/lib-dynload/mlx/core.so"
     if [ -f "$mlx_core_so" ]; then
         log_info "Signing modified mlx/core.so..."
         codesign --force --sign "$CODESIGN_IDENTITY" "$mlx_core_so"
