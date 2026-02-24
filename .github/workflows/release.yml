@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: macos-latest  # Uses GitHub's Mac computer to build
+    permissions:
+      contents: write
 
     steps:
       # Step 1: Download your code
