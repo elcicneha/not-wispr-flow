@@ -982,23 +982,9 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         processing_start = time.time()
         result = state.whisper_model(audio_float)
 
-        # Extract text and check for hallucinations
+        # Extract text
         if isinstance(result, dict):
             text = result.get("text", "").strip()
-            segments = result.get("segments", [])
-
-            # Backup hallucination detection (chars/sec check)
-            # VAD is the primary filter, but this catches edge cases where VAD
-            # lets through quiet audio that Whisper hallucinates on
-            if segments:
-                first_segment = segments[0]
-                segment_duration = first_segment.get("end", 0) - first_segment.get("start", 0)
-                chars_per_sec = len(text) / segment_duration if segment_duration > 0 else 0
-
-                # Real speech: 10-50 chars/sec, Sparse hallucinations: < 3 chars/sec
-                if chars_per_sec < 3.0 and segment_duration > 1.0:
-                    logger.info(f"Backup hallucination filter triggered ({chars_per_sec:.1f} chars/sec)")
-                    return
         else:
             text = str(result).strip()
 
