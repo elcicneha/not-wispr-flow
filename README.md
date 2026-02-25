@@ -1,91 +1,101 @@
 # Not Wispr Flow
 
-# Not Wispr Flow
+Free, offline voice-to-text for **macOS**. Hold a key, speak, release — your words appear wherever your cursor is. Works in any app.
 
-A free, offline voice-to-text tool for **macOS**. Hold a key, speak, release — your words get typed wherever your cursor is. Works in any app.
+Everything runs on your machine. No cloud, no subscription, no data leaving your computer. Uses OpenAI's Whisper model through Apple's MLX framework, running on your Mac's GPU.
 
-Everything runs locally on your machine. No cloud, no subscription, no data leaving your computer. It uses OpenAI's Whisper model through Apple's MLX framework, so transcription happens on your Mac's GPU.
-
-**Requirements:** Mac with Apple Silicon (M1/M2/M3/M4) • ~1-3GB RAM based on the model you choose.
+**You'll need:** Mac with Apple Silicon (M1/M2/M3/M4) • ~1-3GB RAM depending on your model choice.
 
 ---
 
 ## About this project
 
-This was inspired by [Wispr Flow](https://wisprflow.ai/). I genuinely admire what they've built, the product is commendable. This project doesn't come close to the level of quality and features they offer. 
+Inspired by [Wispr Flow](https://wisprflow.ai/). They've built something genuinely impressive — this project doesn't come close to their quality and features.
 
-But this gets the job done for free and runs entirely on your own machine. The tradeoff is it uses some of your RAM (~2-3GB) since the AI model sits in memory while the app is running.
+But this gets the job done for free and runs entirely on your machine. The tradeoff? It'll use some of your RAM (~2-3GB) since the AI model stays in memory while running.
 
 ---
 
 ## Installation
 
-### Option 1: Homebrew (Recommended - Easiest)
+### Prerequisites — Homebrew (Skip if you've got it)
 
+Don't have Homebrew? Open Terminal (search in Spotlight) and run:
 ```bash
-brew tap elcicneha/tap
-brew install --cask not-wispr-flow
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+Follow the instructions, then restart Terminal.
+
+### Setup
+
+**Install what you need:**
+```bash
+brew install python git portaudio
 ```
 
-### Option 2: Download DMG
+**Grab the code:**
 
-1. Download the latest release: **[Releases Page](https://github.com/elcicneha/not-wispr-flow/releases)**
-2. Open the `.dmg` file
-3. Drag "Not Wispr Flow" to Applications folder
-4. **First time only**: Right-click the app and select "Open" (this bypasses macOS security for unsigned apps)
-5. Click "Open" in the dialog
+Want it in a specific folder (like Documents)? Navigate there in Finder, right-click the folder → **New Terminal at Folder**. Then:
 
-### First Launch Setup
-
-Grant these permissions in **System Settings → Privacy & Security**:
-- Microphone
-- Accessibility
-- Input Monitoring
-
-**That's it!** Launch "Not Wispr Flow" from Applications or Spotlight.
-
----
-
-## For Developers: Build From Source
-
-**Setup:**
 ```bash
-# Clone the repository
 git clone https://github.com/elcicneha/not-wispr-flow.git
 cd not-wispr-flow
-
-# Install system dependencies
-brew install python portaudio
-
-# Set up Python environment
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**Run in Terminal:**
+---
+
+## Pick how you want to run it
+
+### Option A: Run in Terminal
+
+Simpler setup, no certificate needed. You'll just run a couple commands each time.
+
+**Start it up:**
 ```bash
 source venv/bin/activate
 python3 main.py
 ```
-Grant permissions for Terminal in System Settings.
+Keep Terminal open while you're using it. Press `Ctrl+C` when you're done.
 
-**Or build as .app:**
-```bash
-# Create certificate (one-time)
-./scripts/create_certificate.sh
-
-# Build and install
-./scripts/install_service.sh
-```
-
-Grant permissions for "Not Wispr Flow" in System Settings.
+**Permissions:** Give **Terminal** access in System Settings → Privacy & Security:
+- Microphone, Accessibility, Input Monitoring
 
 ---
 
-## How to use
+### Option B: Install as Mac App (Recommended)
 
-* **Hold mode:** Hold Control key → speak → release
+Set it up once, then launch it like any other Mac app. You'll need to create a local code signing certificate.
+
+**Why a certificate?** macOS ties permissions to your app's signature. Without it, you'd have to re-grant permissions every time you rebuild. This creates a local-only certificate that makes permissions stick.
+
+**Create your certificate (one-time):**
+```bash
+./scripts/create_certificate.sh
+```
+It'll ask for your password a couple times — just macOS checking you have permission to create certificates.
+
+**Build and install:**
+```bash
+./scripts/install_service.sh
+```
+
+**Launch it:** Open "Not Wispr Flow" from Applications or Spotlight.
+
+**Permissions:** Give **"Not Wispr Flow"** access in System Settings → Privacy & Security:
+- Microphone
+- Accessibility
+- Input Monitoring
+
+**To uninstall:** Run `./scripts/uninstall_service.sh`
+
+---
+
+## How to use it
+
+* **Hold mode:** Hold Control → speak → release
 * **Toggle mode:** Press Control + Space → speak → press Control again
 
 ---
@@ -94,23 +104,21 @@ Grant permissions for "Not Wispr Flow" in System Settings.
 
 | Problem | Fix |
 |---------|-----|
-| Hotkey doesn't work | Check permissions (all 3 must be enabled) |
-| No text appears | Enable Accessibility permission |
-| Logs | `~/Library/Logs/NotWisprFlow/notwisprflow.log` |
+| Hotkey won't work | Check that all 3 permissions are enabled |
+| No text appears | Make sure Accessibility permission is on |
+| Need logs? | Check `~/Library/Logs/NotWisprFlow/notwisprflow.log` |
 
 ---
 
 ## Customization
 
-**Note:** Customization requires building from source (see "For Developers" section above).
-
-Edit [config.py](config.py) to change:
+Want to change things up? Edit [config.py](config.py):
 - **Whisper models:** `whisper-large-v3-turbo` (default), `whisper-small`, `whisper-base`
-- **Hotkeys:** Control key (default), Function key, Command key, Option key, etc.
+- **Hotkeys:** Control key (default), Command key (`{Key.cmd, Key.cmd_r}`), Option key (`{Key.alt, Key.alt_r}`), F13, etc.
 
-Then rebuild: `./scripts/install_service.sh`
+After making changes, rebuild with: `./scripts/install_service.sh`
 
-> A GUI for configuration is planned for future releases.
+> Planning to add a GUI for keyboard shortcuts in the future.
 
 ---
 
