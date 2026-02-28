@@ -541,14 +541,22 @@ def audio_callback(indata, frames, time_info, status):
     Lock-free: deque.append() is atomic under CPython's GIL,
     so no lock is needed and no audio frames are ever dropped.
 
+    CRITICAL: No blocking operations allowed in this callback.
+    This callback runs in a real-time audio thread and must complete
+    in microseconds. Any blocking operations (I/O, logging, locks) will
+    cause stream.stop() to hang indefinitely, leaving the microphone active.
+
+    Status errors (overflow/underflow) are ignored here as they are
+    informational only and logging them would block the callback.
+
     Args:
         indata: Input audio data (numpy array)
         frames: Number of frames
         time_info: Time information
-        status: Stream status flags
+        status: Stream status flags (ignored - no logging in callback)
     """
-    if status:
-        logger.warning(f"Audio callback status: {status}")
+    # Note: status parameter intentionally not checked/logged
+    # Logging here causes blocking I/O that hangs stream cleanup
 
     if state.is_recording:
         state.audio_buffer.append(indata.copy())
