@@ -39,7 +39,7 @@ from ApplicationServices import (
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSOnState, NSOffState,
-    NSImage
+    NSImage, NSPasteboard
 )
 
 # ============================================================================
@@ -802,28 +802,29 @@ def insert_text(text):
     if state.use_type_mode:
         state.keyboard_controller.type(text)
     else:
-        # Save current clipboard contents
-        try:
-            old_clipboard = subprocess.run(
-                ['pbpaste'], capture_output=True, text=True
-            ).stdout
-        except Exception:
-            old_clipboard = None
+        # Save current clipboard contents using NSPasteboard (proper UTF-8 handling)
+        pb = NSPasteboard.generalPasteboard()
+        old_clipboard = pb.stringForType_('public.utf8-plain-text')
 
-        # Copy transcription to clipboard and paste
-        subprocess.run(['pbcopy'], input=text.encode('utf-8'), check=True)
-        time.sleep(0.05)
+        # Copy transcription to clipboard using NSPasteboard
+        # This ensures proper UTF-8 encoding and pasteboard type
+        pb.clearContents()
+        pb.setString_forType_(text, 'public.utf8-plain-text')
+
+        # Paste immediately (minimal delay)
+        time.sleep(0.01)
         state.keyboard_controller.press(Key.cmd)
         state.keyboard_controller.press('v')
         state.keyboard_controller.release('v')
         state.keyboard_controller.release(Key.cmd)
 
-        # Restore previous clipboard after a brief delay
+        # Restore previous clipboard IMMEDIATELY to avoid clipboard history capture
+        # Most clipboard managers sample every 0.1-0.5s, so instant restore avoids capture
+        time.sleep(0.01)
+        pb.clearContents()
         if old_clipboard is not None:
-            time.sleep(0.2)
-            subprocess.run(
-                ['pbcopy'], input=old_clipboard.encode('utf-8'), check=True
-            )
+            pb.setString_forType_(old_clipboard, 'public.utf8-plain-text')
+        # If old_clipboard was None, leave clipboard empty (clearContents already did this)
 
 
 # CFRange struct for extracting cursor position via ctypes
