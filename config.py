@@ -40,7 +40,7 @@ WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 # NOTE: Forcing "en" on Hindi/Punjabi may produce romanized output (Hinglish) but results
 # are inconsistent. For reliable Hinglish, use language="hi" + transliteration library.
 #
-LANGUAGE = "en"
+LANGUAGE = None
 
 # ============================================================================
 # HOTKEY CONFIGURATION
@@ -75,4 +75,4 @@ TOGGLE_KEY = Key.space
 # Enable verbose logging (writes to ~/Library/Logs/NotWisprFlow/notwisprflow.log)
 # Set to True if experiencing issues, then check logs for detailed diagnostics.
 #
-DEBUG = False
+DEBUG = True

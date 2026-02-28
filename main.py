@@ -611,10 +611,24 @@ def _cleanup_stream():
 
         def _close():
             try:
+                if logger:
+                    logger.debug("_cleanup_stream: Calling stream.stop()...")
+                stop_start = time.time()
                 stream.stop()
+                stop_duration = time.time() - stop_start
+                if logger:
+                    logger.debug(f"_cleanup_stream: stream.stop() took {stop_duration:.3f}s")
+
+                if logger:
+                    logger.debug("_cleanup_stream: Calling stream.close()...")
+                close_start = time.time()
                 stream.close()
-            except Exception:
-                pass
+                close_duration = time.time() - close_start
+                if logger:
+                    logger.debug(f"_cleanup_stream: stream.close() took {close_duration:.3f}s")
+            except Exception as e:
+                if logger:
+                    logger.error(f"_cleanup_stream: Exception during cleanup: {e}")
 
         t = threading.Thread(target=_close, daemon=True)
         t.start()
