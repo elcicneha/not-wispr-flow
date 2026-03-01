@@ -448,33 +448,183 @@ def initialize_whisper():
 
 
 # ============================================================================
+# VAD (Voice Activity Detection) Implementation (Numpy-only, no torch)
+# ============================================================================
+
+class SileroVADOnnx:
+    """Numpy-only ONNX wrapper for Silero VAD (no torch dependency)."""
+
+    def __init__(self, model_path):
+        """Initialize VAD with ONNX model path."""
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1
+        opts.log_severity_level = 3
+
+        self.session = ort.InferenceSession(
+            model_path,
+            providers=['CPUExecutionProvider'],
+            sess_options=opts
+        )
+        self.reset_states()
+
+    def reset_states(self, batch_size=1):
+        """Reset LSTM hidden states."""
+        self._state = np.zeros((2, batch_size, 128), dtype=np.float32)
+        self._context = np.zeros((0,), dtype=np.float32)
+        self._last_sr = 0
+        self._last_batch_size = 0
+
+    def __call__(self, x, sr=16000):
+        """Run VAD inference on audio chunk."""
+        # Validate and reshape input
+        if x.ndim == 1:
+            x = x[np.newaxis, :]  # Add batch dimension
+        if x.ndim > 2:
+            raise ValueError(f"Too many dimensions: {x.ndim}")
+
+        batch_size = x.shape[0]
+        num_samples = 512  # For 16kHz
+        context_size = 64  # For 16kHz
+
+        if x.shape[-1] != num_samples:
+            raise ValueError(f"Expected {num_samples} samples, got {x.shape[-1]}")
+
+        # Reset states if conditions changed
+        if not self._last_batch_size or self._last_sr != sr or self._last_batch_size != batch_size:
+            self.reset_states(batch_size)
+
+        # Initialize context if needed
+        if len(self._context) == 0:
+            self._context = np.zeros((batch_size, context_size), dtype=np.float32)
+
+        # Concatenate context with input
+        x_with_context = np.concatenate([self._context, x], axis=1)
+
+        # Run ONNX inference
+        ort_inputs = {
+            'input': x_with_context.astype(np.float32),
+            'state': self._state.astype(np.float32),
+            'sr': np.array(sr, dtype=np.int64)
+        }
+        ort_outs = self.session.run(None, ort_inputs)
+        out, state = ort_outs
+
+        # Update states
+        self._state = state
+        self._context = x_with_context[:, -context_size:]
+        self._last_sr = sr
+        self._last_batch_size = batch_size
+
+        return out
+
+
+def get_speech_timestamps_numpy(audio, model, threshold=0.5, sampling_rate=16000,
+                                 min_speech_duration_ms=250, min_silence_duration_ms=100,
+                                 **kwargs):
+    """
+    Numpy-only version of get_speech_timestamps (no torch dependency).
+
+    Returns list of speech segments as dicts with 'start' and 'end' keys (in samples).
+    """
+    if audio.ndim > 1:
+        audio = audio.flatten()
+
+    model.reset_states()
+
+    window_size_samples = 512  # For 16kHz
+    min_speech_samples = sampling_rate * min_speech_duration_ms // 1000
+    min_silence_samples = sampling_rate * min_silence_duration_ms // 1000
+
+    # Process audio in chunks and collect probabilities
+    speech_probs = []
+    for current_start in range(0, len(audio), window_size_samples):
+        chunk = audio[current_start:current_start + window_size_samples]
+        if len(chunk) < window_size_samples:
+            # Pad last chunk
+            chunk = np.pad(chunk, (0, window_size_samples - len(chunk)), mode='constant')
+
+        speech_prob = model(chunk, sampling_rate)[0, 0]  # Extract scalar
+        speech_probs.append(speech_prob)
+
+    # Find speech segments above threshold
+    triggered = False
+    speeches = []
+    current_speech = {}
+
+    for i, prob in enumerate(speech_probs):
+        if prob >= threshold and not triggered:
+            # Speech started
+            triggered = True
+            current_speech = {'start': i * window_size_samples}
+        elif prob < threshold and triggered:
+            # Speech ended
+            triggered = False
+            current_speech['end'] = i * window_size_samples
+
+            # Filter out short segments
+            duration = current_speech['end'] - current_speech['start']
+            if duration >= min_speech_samples:
+                speeches.append(current_speech)
+            current_speech = {}
+
+    # Handle speech that goes to end of audio
+    if triggered:
+        current_speech['end'] = len(audio)
+        duration = current_speech['end'] - current_speech['start']
+        if duration >= min_speech_samples:
+            speeches.append(current_speech)
+
+    return speeches
+
+
+# ============================================================================
 # VAD (Voice Activity Detection) Initialization
 # ============================================================================
 
 def initialize_vad():
     """
-    Initialize Silero VAD model for silence detection.
+    Initialize Silero VAD model using ONNX runtime.
+    Uses bundled ONNX model for offline speech detection.
 
     Returns:
         tuple: (model, utils) or (None, None) on failure
     """
     try:
-        logger.info("Loading Silero VAD model...")
-        import torch
+        import os
+        import sys
 
-        # Load Silero VAD model and utilities
-        model, utils = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            onnx=False,  # Use PyTorch model for better compatibility
-            trust_repo=True  # Suppress security warning
-        )
+        # Determine model path (bundled in .app or development mode)
+        if getattr(sys, 'frozen', False):
+            # Running as .app bundle
+            bundle_dir = os.path.dirname(sys.executable)
+            model_path = os.path.join(bundle_dir, '..', 'Resources', 'resources', 'silero_vad.onnx')
+        else:
+            # Running in development mode (python3 main.py)
+            model_path = os.path.join(os.path.dirname(__file__), 'resources', 'silero_vad.onnx')
 
-        logger.info("Silero VAD model loaded")
+        model_path = os.path.abspath(model_path)
+
+        if not os.path.exists(model_path):
+            logger.error(f"FATAL: VAD model not found at {model_path}")
+            logger.error("App bundle may be corrupted. Please reinstall.")
+            return None, None
+
+        logger.info(f"Loading Silero VAD from {model_path}")
+
+        # Load ONNX model with numpy-only wrapper (no torch dependency)
+        model = SileroVADOnnx(model_path)
+
+        # Create utils tuple with numpy-only get_speech_timestamps
+        utils = (get_speech_timestamps_numpy,)
+
+        logger.info("Silero VAD model loaded successfully")
         return model, utils
+
     except Exception as e:
-        logger.error(f"Failed to load Silero VAD model: {e}")
+        logger.error(f"Failed to load Silero VAD model: {e}", exc_info=True)
         logger.warning("Continuing without VAD - hallucinations may occur on silence")
         return None, None
 
@@ -496,16 +646,12 @@ def contains_speech(audio_float, sample_rate=SAMPLE_RATE, vad_model=None, vad_ut
         return True  # If VAD not available, proceed with transcription
 
     try:
-        import torch
-
-        # Convert to torch tensor
-        audio_tensor = torch.from_numpy(audio_float)
-
+        # ONNX model accepts numpy arrays directly (no torch conversion needed)
         # Extract get_speech_timestamps function from utils
         get_speech_timestamps = vad_utils[0]
 
         speech_timestamps = get_speech_timestamps(
-            audio_tensor,
+            audio_float,  # Pass numpy array directly
             vad_model,
             sampling_rate=sample_rate,
             threshold=0.5,  # Confidence threshold (0.3-0.6 recommended)

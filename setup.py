@@ -33,6 +33,8 @@ DATA_FILES = [
         'icons/menubar_processing_3.png',
         'icons/menubar_processing_3@2x.png'
     ]),
+    # Silero VAD ONNX model (bundled for offline speech detection)
+    ('resources', ['resources/silero_vad.onnx']),
     # MLX Metal shader library (will be moved to Frameworks by install script)
     ('', [
         'venv/lib/python3.14/site-packages/mlx/lib/mlx.metallib',
@@ -79,8 +81,7 @@ OPTIONS = {
         'av',
         'huggingface_hub',
         'tokenizers',
-        'torch',
-        'torchaudio',
+        'onnxruntime',        # ONNX runtime for VAD (replaces torch)
         'ApplicationServices',
     ],
 
@@ -119,6 +120,9 @@ OPTIONS = {
         'matplotlib',
         'PIL',
         'tkinter',
+        'torch',              # Not needed (using numpy-only VAD implementation)
+        'torchaudio',         # Not needed
+        'silero_vad',         # Not needed (vendored numpy-only implementation)
     ],
 
     # Force inclusion of resources (py2app auto-detects package data)
