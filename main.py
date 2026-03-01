@@ -39,7 +39,7 @@ from ApplicationServices import (
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSOnState, NSOffState,
-    NSImage, NSPasteboard
+    NSImage, NSPasteboard, NSPasteboardItem
 )
 
 # ============================================================================
@@ -632,43 +632,71 @@ def _transcription_wrapper(audio_buffer, **kwargs):
 # Transcription and Text Output
 # ============================================================================
 
+class _PasteboardOwner(NSObject):
+    """Lazy pasteboard owner using declareTypes:owner: (classic macOS API).
+
+    When the target app reads from the clipboard during Cmd+V, macOS calls
+    pasteboard:provideDataForType: on the owner. We provide the text and
+    signal a threading.Event so the caller knows when it's safe to restore
+    the previous clipboard contents — no race condition, no fixed delay.
+    """
+
+    def initWithText_event_(self, text, event):
+        self = objc.super(_PasteboardOwner, self).init()
+        if self is None:
+            return None
+        self._text = text
+        self._consumed = event
+        return self
+
+    def pasteboard_provideDataForType_(self, pb, ptype):
+        """Called by macOS when the target app actually reads the clipboard."""
+        try:
+            pb.setString_forType_(self._text, ptype)
+        finally:
+            self._consumed.set()
+
+
 def insert_text(text):
     """
     Insert transcribed text at cursor position.
-    Uses clipboard paste by default (instant, unicode-safe).
+    Uses clipboard paste by default (instant, unicode-safe) with a lazy owner
+    to detect when the target app has consumed the paste.
     Falls back to character-by-character typing when use_type_mode is enabled.
-    Always saves the text as last_transcription for "Retype Last" menu action.
     """
-    # Save to last_transcription with lock protection
     with state.lock:
         state.last_transcription = text
 
     if state.use_type_mode:
         state.keyboard_controller.type(text)
-    else:
-        # Save current clipboard contents using NSPasteboard (proper UTF-8 handling)
-        pb = NSPasteboard.generalPasteboard()
-        old_clipboard = pb.stringForType_('public.utf8-plain-text')
+        return
 
-        # Copy transcription to clipboard using NSPasteboard
-        # This ensures proper UTF-8 encoding and pasteboard type
-        pb.clearContents()
-        pb.setString_forType_(text, 'public.utf8-plain-text')
+    pb = NSPasteboard.generalPasteboard()
+    old_clipboard = pb.stringForType_('public.utf8-plain-text')
 
-        # Paste immediately (minimal delay)
-        time.sleep(0.01)
-        state.keyboard_controller.press(Key.cmd)
-        state.keyboard_controller.press('v')
-        state.keyboard_controller.release('v')
-        state.keyboard_controller.release(Key.cmd)
+    # Use declareTypes:owner: to register a lazy owner. The owner's
+    # pasteboard:provideDataForType: fires only when the target app
+    # actually reads the clipboard during Cmd+V, so we know exactly
+    # when it's safe to restore.
+    consumed = threading.Event()
+    owner = _PasteboardOwner.alloc().initWithText_event_(text, consumed)
+    pb.declareTypes_owner_(['public.utf8-plain-text'], owner)
 
-        # Restore previous clipboard IMMEDIATELY to avoid clipboard history capture
-        # Most clipboard managers sample every 0.1-0.5s, so instant restore avoids capture
-        time.sleep(0.01)
-        pb.clearContents()
-        if old_clipboard is not None:
-            pb.setString_forType_(old_clipboard, 'public.utf8-plain-text')
-        # If old_clipboard was None, leave clipboard empty (clearContents already did this)
+    # Simulate Cmd+V
+    time.sleep(0.01)
+    state.keyboard_controller.press(Key.cmd)
+    state.keyboard_controller.press('v')
+    state.keyboard_controller.release('v')
+    state.keyboard_controller.release(Key.cmd)
+
+    # Wait until the target app has actually read our text (owner callback fires).
+    # 2s timeout is a safety net — normal paste completes in <50ms.
+    consumed.wait(timeout=2.0)
+
+    # Now safe to restore — the target app has already consumed our text
+    pb.clearContents()
+    if old_clipboard is not None:
+        pb.setString_forType_(old_clipboard, 'public.utf8-plain-text')
 
 
 # CFRange struct for extracting cursor position via ctypes
