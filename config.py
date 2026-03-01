@@ -118,6 +118,21 @@ LLM_ENABLED = True
 GEMINI_MODEL = "gemini-2.5-flash"
 
 # ============================================================================
+# TEXT INSERTION MODE
+# ============================================================================
+# Controls how transcribed text is inserted at the cursor position
+#   False - Use clipboard paste (default, instant, unicode-safe)
+#   True  - Use character-by-character typing (slower, avoids clipboard)
+#
+# Paste mode (False): Faster and more reliable, handles all unicode characters,
+#                     but briefly modifies clipboard (restored immediately)
+# Type mode (True):   Slower, types each character individually, doesn't touch
+#                     clipboard, may have issues with complex unicode
+#
+# You can toggle between modes at runtime via the menu bar "Paste Mode" item
+USE_TYPE_MODE = False
+
+# ============================================================================
 # DEBUGGING
 # ============================================================================
 # Enable verbose logging (writes to ~/Library/Logs/NotWisprFlow/notwisprflow.log)

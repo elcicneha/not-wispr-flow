@@ -47,7 +47,7 @@ from AppKit import (
 # ============================================================================
 from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
                     TRANSCRIPTION_MODE, GROQ_MODEL,
-                    LLM_ENABLED, GEMINI_MODEL)
+                    LLM_ENABLED, GEMINI_MODEL, USE_TYPE_MODE)
 from transcription import TranscriptionManager
 from llm_processor import LLMProcessor
 
@@ -199,7 +199,7 @@ class AppState:
 
         # Text insertion mode
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
-        self.use_type_mode = False       # False = clipboard paste (default), True = character-by-character
+        self.use_type_mode = USE_TYPE_MODE  # False = clipboard paste (default), True = character-by-character
 
         # Transcription state tracking
         self.is_transcribing = False     # True when transcription thread is running

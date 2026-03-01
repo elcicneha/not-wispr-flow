@@ -101,6 +101,7 @@ TOGGLE_KEY = Key.space                # Combine with hotkey for toggle mode
 TRANSCRIPTION_MODE = "auto"           # "auto", "offline", or "online"
 GROQ_API_KEY = ""                     # Required for "online", optional for "auto"
 GROQ_MODEL = "whisper-large-v3-turbo" # Groq Whisper model
+USE_TYPE_MODE = False                 # False = paste mode (default), True = type mode
 DEBUG = False                         # Verbose logging
 ```
 
@@ -123,7 +124,7 @@ CONTEXT_CHARS = 200              # Context window for cursor context
 - **VAD uses ONNX runtime** — `SileroVADOnnx` class wraps the bundled `resources/silero_vad.onnx` model with numpy-only inference (no torch dependency)
 - **MLX operations are pinned to a single thread** — `TranscriptionManager` spawns a dedicated MLX worker thread with a queue; all Metal/MLX calls happen there to avoid threading assertions
 - **Groq API** sends audio as WAV bytes over HTTPS; timeout is 10s; free tier allows 20 requests/min, 2000/day
-- **Text insertion uses clipboard paste by default** — `insert_text()` saves/restores clipboard via `NSPasteboard`, restores immediately to avoid clipboard manager capture. Toggle to type mode via menu bar
+- **Text insertion uses clipboard paste by default** — controlled by `USE_TYPE_MODE` in config.py (False = paste, True = type). `insert_text()` saves/restores clipboard via `NSPasteboard`, restores immediately to avoid clipboard manager capture. Toggle at runtime via menu bar "Paste Mode" item
 - **Exit code 0** on fatal errors is intentional — prevents LaunchAgent `KeepAlive` restart loops
 - **PID file lock** (`~/Library/Logs/NotWisprFlow/notwisprflow.pid`) prevents duplicate instances
 - **Audio callback must never block** — uses lock-free `deque.append()` (GIL-atomic); any blocking I/O in the callback hangs `stream.stop()`
@@ -155,4 +156,4 @@ In `TranscriptionManager.contains_speech()` in `transcription.py`, adjust the pa
 Insert transformations in `post_process()` which receives `(text, context_before, context_after)`. Currently handles smart spacing based on cursor context.
 
 ### Changing text insertion behavior
-Modify `insert_text()` — handles both clipboard paste (default) and `pynput` character-by-character typing. The mode is toggled via the "Paste Mode" menu bar item.
+Set the default mode via `USE_TYPE_MODE` in config.py (False = clipboard paste, True = character-by-character typing). Users can toggle at runtime via the "Paste Mode" menu bar item. Modify `insert_text()` to change the implementation details.
