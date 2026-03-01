@@ -95,11 +95,17 @@ build_app_bundle() {
 
     cd "$PROJECT_DIR"
 
-    # Clean previous build
+    # Clean previous build and Python caches
     if [ -d "build" ] || [ -d "dist" ]; then
         log_info "Cleaning previous build..."
         rm -rf build dist
     fi
+
+    # Clean Python bytecode caches (ensures fresh config.py)
+    log_info "Cleaning Python cache files..."
+    find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    find . -type f -name "*.pyc" -delete 2>/dev/null || true
+    find . -type f -name "*.pyo" -delete 2>/dev/null || true
 
     # Build the app
     log_info "Running: python3 setup.py py2app"

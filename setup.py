@@ -83,6 +83,7 @@ OPTIONS = {
         'tokenizers',
         'onnxruntime',        # ONNX runtime for VAD (replaces torch)
         'groq',               # Groq API client for cloud transcription
+        'pydantic',           # Required by google-genai
         'ApplicationServices',
     ],
 
@@ -105,6 +106,10 @@ OPTIONS = {
         'mlx_whisper.transcribe',
         'mlx_whisper.audio',
         'mlx_whisper.load_models',
+
+        # Google GenAI SDK (namespace package for LLM post-processing)
+        'google.genai',
+        'google.genai.types',
 
         # Other critical imports
         'cffi',
@@ -132,8 +137,8 @@ OPTIONS = {
     # Strip debug symbols to reduce size
     'strip': True,
 
-    # Optimization level (2 = remove docstrings)
-    'optimize': 2,
+    # Optimization level (1 = remove assert statements, keep docstrings for google-generativeai)
+    'optimize': 1,
 
     # Semi-standalone mode (include Python.framework)
     'semi_standalone': False,

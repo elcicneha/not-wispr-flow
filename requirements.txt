@@ -62,3 +62,4 @@ typer==0.23.1
 typer-slim==0.23.1
 typing_extensions==4.15.0
 urllib3==2.6.3
+google-genai

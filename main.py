@@ -46,8 +46,10 @@ from AppKit import (
 # User Configuration - imported from config.py
 # ============================================================================
 from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
-                    TRANSCRIPTION_MODE, GROQ_API_KEY, GROQ_MODEL)
+                    TRANSCRIPTION_MODE, GROQ_MODEL,
+                    LLM_ENABLED, GEMINI_MODEL)
 from transcription import TranscriptionManager
+from llm_processor import LLMProcessor
 
 # ============================================================================
 # Logging Configuration
@@ -152,8 +154,7 @@ def validate_config():
         errors.append("WHISPER_MODEL must be a non-empty HuggingFace model repo name")
     if TRANSCRIPTION_MODE not in ("offline", "online", "auto"):
         errors.append(f"TRANSCRIPTION_MODE must be 'offline', 'online', or 'auto', got '{TRANSCRIPTION_MODE}'")
-    if TRANSCRIPTION_MODE == "online" and not GROQ_API_KEY and not os.environ.get("GROQ_API_KEY"):
-        errors.append("GROQ_API_KEY is required when TRANSCRIPTION_MODE is 'online'")
+    # Note: GROQ_API_KEY validation removed - TranscriptionManager handles it internally
     if errors:
         for e in errors:
             print(f"Configuration error: {e}", file=sys.stderr)
@@ -179,6 +180,9 @@ class AppState:
 
         # Transcription manager (handles Groq API + local MLX Whisper + VAD)
         self.transcription_manager = None
+
+        # LLM processor (optional post-processing with Gemini)
+        self.llm_processor = None
 
         # Keyboard controller for typing output
         self.keyboard_controller = None
@@ -782,18 +786,40 @@ def get_cursor_context(max_chars=CONTEXT_CHARS):
 # Text Post-Processing
 # ============================================================================
 
-def post_process(text, context_before, context_after):
+def post_process(text, context_before, context_after, backend="unknown"):
     """
     Apply post-processing transformations to transcribed text.
+
+    Processing pipeline:
+    1. LLM enhancement (if enabled AND online) - grammar, punctuation, corrections
+    2. Smart spacing - add leading/trailing spaces based on context
 
     Args:
         text: Raw transcribed text
         context_before: Text preceding the cursor (may be None or empty string)
         context_after: Text following the cursor (may be None or empty string)
+        backend: Transcription backend used ("groq" or "local")
 
     Returns:
         str: Post-processed text ready for insertion
     """
+    # Step 1: LLM enhancement (optional, online only)
+    # LLM runs if: enabled AND backend is online (groq)
+    # This respects the offline/online mode separation
+    llm_time = 0.0
+    original_text = text  # Save for logging
+
+    if state.llm_processor and state.llm_processor.enabled and backend == "groq":
+        text, llm_time = state.llm_processor.process(text, context_before, context_after)
+        if llm_time > 0:
+            # Log LLM processing results (always visible, not just DEBUG)
+            logger.info(f"LLM processing: {llm_time:.2f}s")
+            logger.info(f"  Before: {original_text}")
+            logger.info(f"  After:  {text}")
+    elif state.llm_processor and state.llm_processor.enabled and backend == "local":
+        logger.debug("LLM processing skipped (local/offline transcription)")
+
+    # Step 2: Smart spacing (existing logic)
     # Only add a leading space if:
     # - There's actual non-whitespace text before the cursor (not empty/None/whitespace-only)
     # - We're not at the start of a new line (after a newline character)
@@ -889,11 +915,11 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
             logger.info("No speech detected")
             return
 
-        # Post-process transcribed text
-        text = post_process(text, context_before, context_after)
+        # Log original transcription (before post-processing)
+        logger.info(f"Transcription ({backend}): {text}")
 
-        # Only log transcription content in debug mode (may contain sensitive data)
-        logger.debug(f"Transcription: {text}")
+        # Post-process transcribed text (includes LLM enhancement if enabled + online)
+        text = post_process(text, context_before, context_after, backend=backend)
 
         # Insert the text at cursor position
         insert_text(text)
@@ -1423,13 +1449,21 @@ def main():
     # Initialize transcription manager (handles Groq API + local MLX Whisper + VAD)
     state.transcription_manager = TranscriptionManager(
         mode=TRANSCRIPTION_MODE,
-        groq_api_key=GROQ_API_KEY,
+        groq_api_key="",  # Resolved from env/dotfile inside TranscriptionManager
         groq_model=GROQ_MODEL,
         whisper_model=WHISPER_MODEL,
         language=LANGUAGE,
         logger=logger,
     )
     state.transcription_manager.initialize()
+
+    # Initialize LLM processor if enabled
+    state.llm_processor = LLMProcessor(
+        api_key="",  # Resolved from env/dotfile inside LLMProcessor
+        model=GEMINI_MODEL,
+        enabled=LLM_ENABLED,
+        logger=logger,
+    )
 
     # Initialize keyboard controller
     state.keyboard_controller = Controller()
@@ -1448,7 +1482,7 @@ def main():
     logger.info(f"    - Press [{hotkey_name}] + Space together, then speak")
     logger.info(f"    - Press [{hotkey_name}] again to stop and transcribe")
     logger.info("")
-    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, Debug={'ON' if DEBUG else 'OFF'}")
+    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, LLM={'ON' if LLM_ENABLED else 'OFF'}, Debug={'ON' if DEBUG else 'OFF'}")
     logger.info("=" * 60)
     logger.info("")
 

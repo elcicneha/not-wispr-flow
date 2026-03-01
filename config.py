@@ -84,13 +84,38 @@ TRANSCRIPTION_MODE = "auto"
 
 # GROQ_API_KEY: Required for "online" mode, optional for "auto" mode
 # Get a free key at https://console.groq.com
-# Can also be set via the GROQ_API_KEY environment variable
 #
-GROQ_API_KEY = ""
+# API Key: Set via GROQ_API_KEY environment variable or save to ~/.config/notwisprflow/api_key
+# NOT stored in this config file for security reasons
 
 # GROQ_MODEL: Whisper model to use on Groq's API
 #
 GROQ_MODEL = "whisper-large-v3-turbo"
+
+# ============================================================================
+# LLM POST-PROCESSING (Optional Enhancement)
+# ============================================================================
+# Enable LLM-based text enhancement for transcriptions
+#   True  - Send transcriptions to Gemini for grammar/punctuation correction
+#   False - Use raw Whisper output (faster, no API calls)
+#
+# IMPORTANT: LLM processing requires internet connectivity
+# - In "offline" mode: LLM is automatically disabled (no online operations)
+# - In "online" mode: LLM runs if enabled and API key is present
+# - In "auto" mode: LLM runs when using Groq (online), skipped when using local Whisper (offline fallback)
+#
+# Note: LLM processing adds ~0.5-2s latency but significantly improves quality
+# Privacy: When enabled, transcribed text is sent to Google's Gemini API
+#
+# API Key: Set via GEMINI_API_KEY environment variable or save to ~/.config/notwisprflow/gemini_api_key
+# Get a free key at https://aistudio.google.com/app/apikey
+LLM_ENABLED = True
+
+# GEMINI_MODEL: Gemini model to use for text enhancement
+#   "gemini-2.5-flash"      - Latest, fastest (recommended for real-time use ~500-800ms)
+#   "gemini-2.0-flash"      - Previous generation, still fast (~600-900ms)
+#   "gemini-2.5-pro"        - Highest quality (slower, costs more) (~1500-2500ms)
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # ============================================================================
 # DEBUGGING
