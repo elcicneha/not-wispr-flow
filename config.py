@@ -70,6 +70,29 @@ HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}
 TOGGLE_KEY = Key.space
 
 # ============================================================================
+# TRANSCRIPTION BACKEND
+# ============================================================================
+# TRANSCRIPTION_MODE: Controls how audio is transcribed
+#   "auto"     - Try Groq API first, fall back to local MLX Whisper (default)
+#   "offline"  - Always use local MLX Whisper (100% offline, ~2.3GB RAM)
+#   "online"   - Always use Groq API (requires internet + API key, low RAM)
+#
+# Privacy: "online" and "auto" modes send audio to Groq's servers for transcription.
+# In "auto" mode without an API key, only local transcription is used.
+#
+TRANSCRIPTION_MODE = "auto"
+
+# GROQ_API_KEY: Required for "online" mode, optional for "auto" mode
+# Get a free key at https://console.groq.com
+# Can also be set via the GROQ_API_KEY environment variable
+#
+GROQ_API_KEY = ""
+
+# GROQ_MODEL: Whisper model to use on Groq's API
+#
+GROQ_MODEL = "whisper-large-v3-turbo"
+
+# ============================================================================
 # DEBUGGING
 # ============================================================================
 # Enable verbose logging (writes to ~/Library/Logs/NotWisprFlow/notwisprflow.log)

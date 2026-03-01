@@ -45,7 +45,9 @@ from AppKit import (
 # ============================================================================
 # User Configuration - imported from config.py
 # ============================================================================
-from config import HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE
+from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
+                    TRANSCRIPTION_MODE, GROQ_API_KEY, GROQ_MODEL)
+from transcription import TranscriptionManager
 
 # ============================================================================
 # Logging Configuration
@@ -148,6 +150,10 @@ def validate_config():
         errors.append(f"SAMPLE_RATE must be > 0, got {SAMPLE_RATE}")
     if not WHISPER_MODEL:
         errors.append("WHISPER_MODEL must be a non-empty HuggingFace model repo name")
+    if TRANSCRIPTION_MODE not in ("offline", "online", "auto"):
+        errors.append(f"TRANSCRIPTION_MODE must be 'offline', 'online', or 'auto', got '{TRANSCRIPTION_MODE}'")
+    if TRANSCRIPTION_MODE == "online" and not GROQ_API_KEY and not os.environ.get("GROQ_API_KEY"):
+        errors.append("GROQ_API_KEY is required when TRANSCRIPTION_MODE is 'online'")
     if errors:
         for e in errors:
             print(f"Configuration error: {e}", file=sys.stderr)
@@ -171,13 +177,8 @@ class AppState:
         # Audio buffer — lock-free deque for audio callback thread
         self.audio_buffer = deque()
 
-        # Transcription function: callable(audio_float: np.ndarray) -> str
-        # Initialized by initialize_whisper(), backend-agnostic
-        self.whisper_model = None
-
-        # VAD model and utilities for silence detection (initialized at startup)
-        self.vad_model = None
-        self.vad_utils = None
+        # Transcription manager (handles Groq API + local MLX Whisper + VAD)
+        self.transcription_manager = None
 
         # Keyboard controller for typing output
         self.keyboard_controller = None
@@ -369,310 +370,6 @@ def update_menu_bar_icon(state_name):
     _icon_manager.update_state(state_name)
 
 
-# ============================================================================
-# Whisper Model Initialization
-# ============================================================================
-
-def initialize_whisper():
-    """
-    Initialize the Whisper backend and return a transcription function.
-
-    This is the ONLY function that knows about the specific Whisper backend.
-    To switch backends (e.g. faster-whisper, whisper.cpp), only modify this function.
-    The returned callable must accept a float32 numpy array and return a string.
-
-    All MLX/Metal GPU operations are pinned to a single dedicated thread to avoid
-    Metal command buffer threading assertions.
-
-    Returns:
-        callable: transcribe(audio_float: np.ndarray) -> str
-    """
-    import queue
-
-    work_q = queue.Queue()
-    result_q = queue.Queue()
-
-    def mlx_worker():
-        """Dedicated thread — all MLX/Metal operations happen here."""
-        try:
-            import mlx_whisper
-
-            # Pre-warm: download + load model on this thread
-            silent_audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
-            mlx_whisper.transcribe(silent_audio, path_or_hf_repo=WHISPER_MODEL, language=LANGUAGE)
-            result_q.put(True)
-
-            # Process transcription requests forever
-            while True:
-                audio_float = work_q.get()
-                try:
-                    result = mlx_whisper.transcribe(
-                        audio_float,
-                        path_or_hf_repo=WHISPER_MODEL,
-                        language=LANGUAGE,
-                    )
-                    result_q.put(result)  # Return full dict for inspection
-                except Exception as e:
-                    result_q.put(e)
-        except Exception as e:
-            result_q.put(e)
-
-    try:
-        logger.info(f"Loading Whisper model: {WHISPER_MODEL}")
-
-        worker = threading.Thread(target=mlx_worker, daemon=True)
-        worker.start()
-
-        # Wait for pre-warm to complete
-        warmup_result = result_q.get()
-        if isinstance(warmup_result, Exception):
-            raise warmup_result
-
-        logger.info(f"Whisper model loaded: {WHISPER_MODEL}")
-
-        def transcribe(audio_float):
-            work_q.put(audio_float)
-            result = result_q.get()
-            if isinstance(result, Exception):
-                raise result
-            return result
-
-        return transcribe
-
-    except Exception as e:
-        logger.error(f"FATAL ERROR: Failed to load Whisper model")
-        logger.error(f"Details: {e}")
-        logger.error("Please check your internet connection (first download) and try again.")
-        # Exit 0 so LaunchAgent KeepAlive doesn't create an infinite restart loop
-        sys.exit(0)
-
-
-# ============================================================================
-# VAD (Voice Activity Detection) Implementation (Numpy-only, no torch)
-# ============================================================================
-
-class SileroVADOnnx:
-    """Numpy-only ONNX wrapper for Silero VAD (no torch dependency)."""
-
-    def __init__(self, model_path):
-        """Initialize VAD with ONNX model path."""
-        import onnxruntime as ort
-
-        opts = ort.SessionOptions()
-        opts.inter_op_num_threads = 1
-        opts.intra_op_num_threads = 1
-        opts.log_severity_level = 3
-
-        self.session = ort.InferenceSession(
-            model_path,
-            providers=['CPUExecutionProvider'],
-            sess_options=opts
-        )
-        self.reset_states()
-
-    def reset_states(self, batch_size=1):
-        """Reset LSTM hidden states."""
-        self._state = np.zeros((2, batch_size, 128), dtype=np.float32)
-        self._context = np.zeros((0,), dtype=np.float32)
-        self._last_sr = 0
-        self._last_batch_size = 0
-
-    def __call__(self, x, sr=16000):
-        """Run VAD inference on audio chunk."""
-        # Validate and reshape input
-        if x.ndim == 1:
-            x = x[np.newaxis, :]  # Add batch dimension
-        if x.ndim > 2:
-            raise ValueError(f"Too many dimensions: {x.ndim}")
-
-        batch_size = x.shape[0]
-        num_samples = 512  # For 16kHz
-        context_size = 64  # For 16kHz
-
-        if x.shape[-1] != num_samples:
-            raise ValueError(f"Expected {num_samples} samples, got {x.shape[-1]}")
-
-        # Reset states if conditions changed
-        if not self._last_batch_size or self._last_sr != sr or self._last_batch_size != batch_size:
-            self.reset_states(batch_size)
-
-        # Initialize context if needed
-        if len(self._context) == 0:
-            self._context = np.zeros((batch_size, context_size), dtype=np.float32)
-
-        # Concatenate context with input
-        x_with_context = np.concatenate([self._context, x], axis=1)
-
-        # Run ONNX inference
-        ort_inputs = {
-            'input': x_with_context.astype(np.float32),
-            'state': self._state.astype(np.float32),
-            'sr': np.array(sr, dtype=np.int64)
-        }
-        ort_outs = self.session.run(None, ort_inputs)
-        out, state = ort_outs
-
-        # Update states
-        self._state = state
-        self._context = x_with_context[:, -context_size:]
-        self._last_sr = sr
-        self._last_batch_size = batch_size
-
-        return out
-
-
-def get_speech_timestamps_numpy(audio, model, threshold=0.5, sampling_rate=16000,
-                                 min_speech_duration_ms=250, min_silence_duration_ms=100,
-                                 **kwargs):
-    """
-    Numpy-only version of get_speech_timestamps (no torch dependency).
-
-    Returns list of speech segments as dicts with 'start' and 'end' keys (in samples).
-    """
-    if audio.ndim > 1:
-        audio = audio.flatten()
-
-    model.reset_states()
-
-    window_size_samples = 512  # For 16kHz
-    min_speech_samples = sampling_rate * min_speech_duration_ms // 1000
-    min_silence_samples = sampling_rate * min_silence_duration_ms // 1000
-
-    # Process audio in chunks and collect probabilities
-    speech_probs = []
-    for current_start in range(0, len(audio), window_size_samples):
-        chunk = audio[current_start:current_start + window_size_samples]
-        if len(chunk) < window_size_samples:
-            # Pad last chunk
-            chunk = np.pad(chunk, (0, window_size_samples - len(chunk)), mode='constant')
-
-        speech_prob = model(chunk, sampling_rate)[0, 0]  # Extract scalar
-        speech_probs.append(speech_prob)
-
-    # Find speech segments above threshold
-    triggered = False
-    speeches = []
-    current_speech = {}
-
-    for i, prob in enumerate(speech_probs):
-        if prob >= threshold and not triggered:
-            # Speech started
-            triggered = True
-            current_speech = {'start': i * window_size_samples}
-        elif prob < threshold and triggered:
-            # Speech ended
-            triggered = False
-            current_speech['end'] = i * window_size_samples
-
-            # Filter out short segments
-            duration = current_speech['end'] - current_speech['start']
-            if duration >= min_speech_samples:
-                speeches.append(current_speech)
-            current_speech = {}
-
-    # Handle speech that goes to end of audio
-    if triggered:
-        current_speech['end'] = len(audio)
-        duration = current_speech['end'] - current_speech['start']
-        if duration >= min_speech_samples:
-            speeches.append(current_speech)
-
-    return speeches
-
-
-# ============================================================================
-# VAD (Voice Activity Detection) Initialization
-# ============================================================================
-
-def initialize_vad():
-    """
-    Initialize Silero VAD model using ONNX runtime.
-    Uses bundled ONNX model for offline speech detection.
-
-    Returns:
-        tuple: (model, utils) or (None, None) on failure
-    """
-    try:
-        import os
-        import sys
-
-        # Determine model path (bundled in .app or development mode)
-        if getattr(sys, 'frozen', False):
-            # Running as .app bundle
-            bundle_dir = os.path.dirname(sys.executable)
-            model_path = os.path.join(bundle_dir, '..', 'Resources', 'resources', 'silero_vad.onnx')
-        else:
-            # Running in development mode (python3 main.py)
-            model_path = os.path.join(os.path.dirname(__file__), 'resources', 'silero_vad.onnx')
-
-        model_path = os.path.abspath(model_path)
-
-        if not os.path.exists(model_path):
-            logger.error(f"FATAL: VAD model not found at {model_path}")
-            logger.error("App bundle may be corrupted. Please reinstall.")
-            return None, None
-
-        logger.info(f"Loading Silero VAD from {model_path}")
-
-        # Load ONNX model with numpy-only wrapper (no torch dependency)
-        model = SileroVADOnnx(model_path)
-
-        # Create utils tuple with numpy-only get_speech_timestamps
-        utils = (get_speech_timestamps_numpy,)
-
-        logger.info("Silero VAD model loaded successfully")
-        return model, utils
-
-    except Exception as e:
-        logger.error(f"Failed to load Silero VAD model: {e}", exc_info=True)
-        logger.warning("Continuing without VAD - hallucinations may occur on silence")
-        return None, None
-
-
-def contains_speech(audio_float, sample_rate=SAMPLE_RATE, vad_model=None, vad_utils=None):
-    """
-    Check if audio contains speech using Silero VAD.
-
-    Args:
-        audio_float: Audio as float32 numpy array [-1.0, 1.0]
-        sample_rate: Sample rate (default: 16000)
-        vad_model: Silero VAD model (if None, skips VAD check)
-        vad_utils: Silero VAD utilities tuple (if None, skips VAD check)
-
-    Returns:
-        True if speech detected or VAD unavailable, False if silence detected
-    """
-    if vad_model is None or vad_utils is None:
-        return True  # If VAD not available, proceed with transcription
-
-    try:
-        # ONNX model accepts numpy arrays directly (no torch conversion needed)
-        # Extract get_speech_timestamps function from utils
-        get_speech_timestamps = vad_utils[0]
-
-        speech_timestamps = get_speech_timestamps(
-            audio_float,  # Pass numpy array directly
-            vad_model,
-            sampling_rate=sample_rate,
-            threshold=0.5,  # Confidence threshold (0.3-0.6 recommended)
-            min_speech_duration_ms=250,  # Minimum speech duration
-            min_silence_duration_ms=100,  # Minimum silence duration to split
-            return_seconds=False  # Return in samples, not seconds
-        )
-
-        # If we found any speech segments, return True
-        has_speech = len(speech_timestamps) > 0
-
-        if not has_speech:
-            logger.info("VAD: No speech detected in audio")
-        else:
-            logger.debug(f"VAD: Detected {len(speech_timestamps)} speech segment(s)")
-
-        return has_speech
-
-    except Exception as e:
-        logger.warning(f"VAD check failed: {e}, proceeding with transcription")
-        return True  # On error, proceed with transcription
 
 
 # ============================================================================
@@ -799,7 +496,7 @@ def cleanup_stale_overflow_files():
         logger.warning(f"Failed to clean stale overflow files: {e}")
 
 
-def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcription_chars, processing_sec):
+def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcription_chars, processing_sec, backend="unknown"):
     """Append one JSON line of recording analytics to STATS_FILE."""
     try:
         entry = {
@@ -810,6 +507,7 @@ def log_recording_stats(duration_sec, buffer_mb, mode, overflow_count, transcrip
             "overflow_files": overflow_count,
             "transcription_chars": transcription_chars,
             "processing_sec": round(processing_sec, 2),
+            "backend": backend,
         }
         with open(STATS_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -1140,22 +838,24 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         logger.debug(f"Transcribing {duration:.2f}s of audio...")
 
         # VAD check: Skip transcription if no speech detected
-        if not contains_speech(audio_float, SAMPLE_RATE, state.vad_model, state.vad_utils):
+        if not state.transcription_manager.contains_speech(audio_float):
             logger.info("Skipping transcription - no speech detected by VAD")
             return
 
         # Capture cursor context (kept for future use)
         context_before, context_after = get_cursor_context()
 
-        # Transcribe with Whisper
+        # Transcribe (Groq API or local MLX Whisper depending on mode)
         processing_start = time.time()
-        result = state.whisper_model(audio_float)
+        result = state.transcription_manager.transcribe(audio_float)
 
-        # Extract text
+        # Extract text and backend
         if isinstance(result, dict):
             text = result.get("text", "").strip()
+            backend = result.get("backend", "unknown")
         else:
             text = str(result).strip()
+            backend = "unknown"
 
         if not text:
             logger.info("No speech detected")
@@ -1166,17 +866,19 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
 
         # Only log transcription content in debug mode (may contain sensitive data)
         logger.debug(f"Transcription: {text}")
-        logger.info(f"Transcribed {len(text)} characters")
 
         # Insert the text at cursor position
         insert_text(text)
         processing_sec = time.time() - processing_start
 
+        # Log backend + timing summary (easy to grep/compare API vs local)
+        total_sec = time.time() - recording_stop_time if recording_stop_time else processing_sec
+        logger.info(f"[{backend.upper()}] {len(text)} chars in {total_sec:.2f}s total ({processing_sec:.2f}s transcription)")
+
         # Log recording analytics
         rec_duration = (recording_stop_time - recording_start_time) if (recording_start_time and recording_stop_time) else duration
         buffer_mb = audio_data.nbytes / (1024 * 1024)
-        logger.info(f"Processing took {processing_sec:.2f}s")
-        log_recording_stats(rec_duration, buffer_mb, recording_mode, len(overflow_files), len(text), processing_sec)
+        log_recording_stats(rec_duration, buffer_mb, recording_mode, len(overflow_files), len(text), processing_sec, backend)
 
     except Exception as e:
         logger.error(f"Transcription error: {e}")
@@ -1690,11 +1392,16 @@ def main():
     # Check accessibility permissions (exits if not granted)
     check_accessibility_permission()
 
-    # Initialize Whisper model
-    state.whisper_model = initialize_whisper()
-
-    # Initialize Silero VAD for silence detection
-    state.vad_model, state.vad_utils = initialize_vad()
+    # Initialize transcription manager (handles Groq API + local MLX Whisper + VAD)
+    state.transcription_manager = TranscriptionManager(
+        mode=TRANSCRIPTION_MODE,
+        groq_api_key=GROQ_API_KEY,
+        groq_model=GROQ_MODEL,
+        whisper_model=WHISPER_MODEL,
+        language=LANGUAGE,
+        logger=logger,
+    )
+    state.transcription_manager.initialize()
 
     # Initialize keyboard controller
     state.keyboard_controller = Controller()
@@ -1713,7 +1420,7 @@ def main():
     logger.info(f"    - Press [{hotkey_name}] + Space together, then speak")
     logger.info(f"    - Press [{hotkey_name}] again to stop and transcribe")
     logger.info("")
-    logger.info(f"Settings: Model={WHISPER_MODEL}, Debug={'ON' if DEBUG else 'OFF'}")
+    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, Debug={'ON' if DEBUG else 'OFF'}")
     logger.info("=" * 60)
     logger.info("")
 
@@ -1730,6 +1437,8 @@ def main():
     # Register cleanup for app termination
     def cleanup():
         logger.info("Shutting down Not Wispr Flow...")
+        if state.transcription_manager:
+            state.transcription_manager.shutdown()
         listener.stop()
         with state.lock:
             if state.is_recording:

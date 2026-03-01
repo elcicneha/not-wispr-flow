@@ -82,6 +82,7 @@ OPTIONS = {
         'huggingface_hub',
         'tokenizers',
         'onnxruntime',        # ONNX runtime for VAD (replaces torch)
+        'groq',               # Groq API client for cloud transcription
         'ApplicationServices',
     ],
 

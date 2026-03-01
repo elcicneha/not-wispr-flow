@@ -144,6 +144,25 @@ You'll see a menu bar icon at the top of your screen when it's running.
 
 ---
 
+## Online mode (optional)
+
+Out of the box, everything runs offline on your Mac. But if you add a free API key, the app will automatically use [Groq's](https://groq.com) online transcription instead — it's faster and uses less RAM. If your internet drops, it falls back to offline automatically.
+
+**To enable it:**
+
+1. Go to [console.groq.com](https://console.groq.com) and create a free account
+2. Generate an API key
+3. Save it to a file (paste these in Terminal):
+   ```bash
+   mkdir -p ~/.config/notwisprflow
+   echo "paste-your-api-key-here" > ~/.config/notwisprflow/api_key
+   ```
+4. Restart the app — done!
+
+**Don't want online at all?** Set `TRANSCRIPTION_MODE = "offline"` in [config.py](config.py) and it'll never leave your Mac, even if you have an API key.
+
+---
+
 ## Customization
 
 Want to change things up? Edit [config.py](config.py) in any text editor:
