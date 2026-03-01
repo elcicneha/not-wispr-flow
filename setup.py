@@ -7,27 +7,11 @@ macOS application with all dependencies bundled, including native libraries.
 """
 
 import sys
-import os
-import glob
 from setuptools import setup
 
 # Increase recursion limit for py2app's dependency analysis
 # (needed for complex packages like scipy, numpy, etc.)
 sys.setrecursionlimit(10000)
-
-# Detect Python version for paths (works with any Python 3.x version)
-PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
-
-# Find the site-packages directory (works in both venv and system Python)
-def find_site_packages():
-    """Find the site-packages directory for the current Python environment."""
-    for path in sys.path:
-        if 'site-packages' in path:
-            return path
-    # Fallback: use venv path
-    return f"venv/lib/python{PYTHON_VERSION}/site-packages"
-
-SITE_PACKAGES = find_site_packages()
 
 APP = ['main.py']
 DATA_FILES = [
@@ -51,7 +35,7 @@ DATA_FILES = [
     ]),
     # MLX Metal shader library (will be moved to Frameworks by install script)
     ('', [
-        os.path.join(SITE_PACKAGES, 'mlx/lib/mlx.metallib'),
+        'venv/lib/python3.14/site-packages/mlx/lib/mlx.metallib',
     ])
 ]
 
@@ -127,7 +111,7 @@ OPTIONS = {
 
     # Frameworks to bundle (PyObjC frameworks for keyboard control)
     'frameworks': [
-        os.path.join(SITE_PACKAGES, 'mlx/lib/libmlx.dylib'),
+        'venv/lib/python3.14/site-packages/mlx/lib/libmlx.dylib',
     ],
 
     # Don't include these packages (reduce bundle size)

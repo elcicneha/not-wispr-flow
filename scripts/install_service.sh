@@ -23,10 +23,6 @@ APP_INSTALL_PATH="/Applications/Not Wispr Flow.app"
 LOG_DIR="$HOME/Library/Logs/NotWisprFlow"
 CODESIGN_IDENTITY="Not Wispr Flow Dev"
 
-# Detect Python version dynamically (works with any Python 3.x)
-# This will be set after venv is verified in check_prerequisites
-PYTHON_VERSION=""
-
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
@@ -50,10 +46,6 @@ check_prerequisites() {
         exit 1
     fi
     log_success "Found virtual environment"
-
-    # Detect Python version (e.g., "3.14", "3.11")
-    PYTHON_VERSION=$("$VENV_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-    log_success "Detected Python version: $PYTHON_VERSION"
 
     # Check setup.py
     if [ ! -f "$SETUP_PY" ]; then
@@ -123,7 +115,7 @@ build_app_bundle() {
 
     # Fix MLX library rpaths
     log_info "Fixing MLX library rpaths..."
-    local mlx_core_so="$APP_BUNDLE/Contents/Resources/lib/python$PYTHON_VERSION/lib-dynload/mlx/core.so"
+    local mlx_core_so="$APP_BUNDLE/Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so"
     local frameworks_dir="$APP_BUNDLE/Contents/Frameworks"
 
     if [ -f "$mlx_core_so" ]; then
@@ -149,6 +141,45 @@ build_app_bundle() {
         log_warning "mlx.metallib not found at $metallib_source"
     fi
 
+    # Fix torch and torchaudio library rpaths (needed for Silero VAD)
+    log_info "Fixing torch and torchaudio library rpaths..."
+    local torch_lib_dir="$APP_BUNDLE/Contents/Resources/lib/python3.14/torch/lib"
+    local torchaudio_lib_dir="$APP_BUNDLE/Contents/Resources/lib/python3.14/torchaudio/lib"
+
+    # Fix torch libraries (they reference each other via @rpath)
+    if [ -d "$torch_lib_dir" ]; then
+        for lib in "$torch_lib_dir"/*.dylib; do
+            if [ -f "$lib" ]; then
+                # Fix @rpath references to point to same directory
+                install_name_tool -change @rpath/libc10.dylib @loader_path/libc10.dylib "$lib" 2>/dev/null || true
+                install_name_tool -change @rpath/libomp.dylib @loader_path/libomp.dylib "$lib" 2>/dev/null || true
+                install_name_tool -change @rpath/libtorch.dylib @loader_path/libtorch.dylib "$lib" 2>/dev/null || true
+                install_name_tool -change @rpath/libtorch_cpu.dylib @loader_path/libtorch_cpu.dylib "$lib" 2>/dev/null || true
+            fi
+        done
+        log_success "Fixed rpaths for torch libraries"
+    fi
+
+    # Fix torchaudio libraries to find torch libraries
+    if [ -d "$torchaudio_lib_dir" ]; then
+        for lib in "$torchaudio_lib_dir"/*.so; do
+            if [ -f "$lib" ]; then
+                # Change @rpath references to @loader_path relative paths
+                # torchaudio/lib is at: Contents/Resources/lib/python3.14/torchaudio/lib
+                # torch/lib is at: Contents/Resources/lib/python3.14/torch/lib
+                # Relative path: ../../torch/lib
+                # Fix references to torch libraries (different directory)
+                install_name_tool -change @rpath/libtorch.dylib @loader_path/../../torch/lib/libtorch.dylib "$lib" 2>/dev/null || true
+                install_name_tool -change @rpath/libtorch_cpu.dylib @loader_path/../../torch/lib/libtorch_cpu.dylib "$lib" 2>/dev/null || true
+                install_name_tool -change @rpath/libc10.dylib @loader_path/../../torch/lib/libc10.dylib "$lib" 2>/dev/null || true
+                install_name_tool -change @rpath/libtorch_python.dylib @loader_path/../../torch/lib/libtorch_python.dylib "$lib" 2>/dev/null || true
+                # Fix references to torchaudio libraries (same directory)
+                install_name_tool -change @rpath/libtorchaudio.so @loader_path/libtorchaudio.so "$lib" 2>/dev/null || true
+            fi
+        done
+        log_success "Fixed rpaths for torchaudio libraries"
+    fi
+
     # Verify bundle
     log_info "Verifying bundle contents..."
     if [ -f "$SCRIPT_DIR/verify_bundle.sh" ]; then
@@ -170,12 +201,32 @@ install_app() {
     # Copy to /Applications
     cp -R "$APP_BUNDLE" "$APP_INSTALL_PATH"
 
-    # Sign mlx/core.so individually (install_name_tool invalidated its signature)
-    local mlx_core_so="$APP_INSTALL_PATH/Contents/Resources/lib/python$PYTHON_VERSION/lib-dynload/mlx/core.so"
+    # Sign all libraries modified by install_name_tool (rpath fixes invalidate signatures)
+    local mlx_core_so="$APP_INSTALL_PATH/Contents/Resources/lib/python3.14/lib-dynload/mlx/core.so"
     if [ -f "$mlx_core_so" ]; then
         log_info "Signing modified mlx/core.so..."
         codesign --force --sign "$CODESIGN_IDENTITY" "$mlx_core_so"
         log_success "Signed mlx/core.so"
+    fi
+
+    # Sign torch libraries (install_name_tool invalidated their signatures)
+    local torch_lib_dir="$APP_INSTALL_PATH/Contents/Resources/lib/python3.14/torch/lib"
+    if [ -d "$torch_lib_dir" ]; then
+        log_info "Signing modified torch libraries..."
+        for lib in "$torch_lib_dir"/*.dylib; do
+            [ -f "$lib" ] && codesign --force --sign "$CODESIGN_IDENTITY" "$lib"
+        done
+        log_success "Signed torch libraries"
+    fi
+
+    # Sign torchaudio libraries (install_name_tool invalidated their signatures)
+    local torchaudio_lib_dir="$APP_INSTALL_PATH/Contents/Resources/lib/python3.14/torchaudio/lib"
+    if [ -d "$torchaudio_lib_dir" ]; then
+        log_info "Signing modified torchaudio libraries..."
+        for lib in "$torchaudio_lib_dir"/*.so; do
+            [ -f "$lib" ] && codesign --force --sign "$CODESIGN_IDENTITY" "$lib"
+        done
+        log_success "Signed torchaudio libraries"
     fi
 
     # Sign the installed app (using persistent certificate preserves permissions across rebuilds)
