@@ -55,7 +55,7 @@ There are no automated tests. Manual testing requires running the app and dictat
 3. **Audio Pipeline** — `sounddevice.InputStream` → numpy buffer (lock-free deque) → `TranscriptionManager.contains_speech()` → `TranscriptionManager.transcribe()` → clipboard paste (default)
 4. **Smart Model Management** — In auto mode, a background connectivity monitor unloads the local model after 60s stable internet (frees ~2.3GB RAM) and pre-loads it immediately when connectivity drops
 5. **Keyboard Handling** — `pynput.Listener` with `on_press`/`on_release` callbacks implementing a state machine with stuck-state recovery
-6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager`, plus `MenuDelegate` for Retype Last, Paste Mode toggle, and Quit
+6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager`, plus `MenuDelegate` for Retype Last, Paste Mode toggle, LLM Enhancement toggle, and Quit
 7. **Cursor Context** — `get_cursor_context()` reads text around cursor via macOS Accessibility APIs for smart spacing
 8. **Buffer Overflow** — Long recordings flush to `.npy` files on disk when buffer exceeds threshold; reassembled at transcription time
 9. **Health Monitor** — Background thread detecting dead audio streams, stuck keys, and triggering buffer flushes
@@ -101,6 +101,8 @@ TOGGLE_KEY = Key.space                # Combine with hotkey for toggle mode
 TRANSCRIPTION_MODE = "auto"           # "auto", "offline", or "online"
 GROQ_API_KEY = ""                     # Required for "online", optional for "auto"
 GROQ_MODEL = "whisper-large-v3-turbo" # Groq Whisper model
+LLM_ENABLED = True                    # Enable LLM post-processing (default state)
+GEMINI_MODEL = "gemini-2.5-flash"     # Gemini model for LLM enhancement
 USE_TYPE_MODE = False                 # False = paste mode (default), True = type mode
 DEBUG = False                         # Verbose logging
 ```
@@ -125,6 +127,7 @@ CONTEXT_CHARS = 200              # Context window for cursor context
 - **MLX operations are pinned to a single thread** — `TranscriptionManager` spawns a dedicated MLX worker thread with a queue; all Metal/MLX calls happen there to avoid threading assertions
 - **Groq API** sends audio as WAV bytes over HTTPS; timeout is 10s; free tier allows 20 requests/min, 2000/day
 - **Text insertion uses clipboard paste by default** — controlled by `USE_TYPE_MODE` in config.py (False = paste, True = type). `insert_text()` saves/restores clipboard via `NSPasteboard`, restores immediately to avoid clipboard manager capture. Toggle at runtime via menu bar "Paste Mode" item
+- **LLM post-processing** — controlled by `LLM_ENABLED` in config.py (default state). Can be toggled at runtime via menu bar "LLM Enhancement" item. LLM only runs when using online transcription (Groq backend), never with local/offline transcription
 - **Exit code 0** on fatal errors is intentional — prevents LaunchAgent `KeepAlive` restart loops
 - **PID file lock** (`~/Library/Logs/NotWisprFlow/notwisprflow.pid`) prevents duplicate instances
 - **Audio callback must never block** — uses lock-free `deque.append()` (GIL-atomic); any blocking I/O in the callback hangs `stream.stop()`

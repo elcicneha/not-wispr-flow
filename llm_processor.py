@@ -13,6 +13,21 @@ import os
 import time
 from typing import Optional, Tuple
 
+# ============================================================================
+# LLM PROMPT TEMPLATE
+# ============================================================================
+# This prompt is sent to Gemini to enhance transcribed text.
+# Customize this to change how the LLM processes your dictations.
+#
+LLM_SYSTEM_PROMPT = """You are a text correction assistant for voice dictation. Your task is to:
+
+1. Fix grammar and punctuation errors
+2. Correct obvious transcription mistakes (e.g., "their" → "there" if contextually wrong)
+3. Preserve the original meaning, tone, and intent
+4. Keep informal language if that's the speaker's style
+5. Return ONLY the corrected text, no explanations or quotes
+"""
+
 
 class LLMProcessor:
     """
@@ -164,31 +179,21 @@ class LLMProcessor:
         """
         Build prompt for Gemini API with optional context.
 
-        The prompt is designed to:
-        - Correct grammar and punctuation
-        - Preserve the original meaning and tone
-        - Maintain conversational flow if context is provided
-        - Return ONLY the corrected text without explanations
+        Uses the LLM_SYSTEM_PROMPT constant (defined at top of file) and adds
+        cursor context if available.
         """
-        base_prompt = """You are a text correction assistant for voice dictation. Your task is to:
-
-1. Fix grammar and punctuation errors
-2. Correct obvious transcription mistakes (e.g., "their" → "there" if contextually wrong)
-3. Preserve the original meaning, tone, and intent
-4. Keep informal language if that's the speaker's style
-5. Return ONLY the corrected text, no explanations or quotes
-
-"""
+        # Start with the system prompt template
+        prompt = LLM_SYSTEM_PROMPT + "\n"
 
         # Add context if available
         if context_before and context_before.strip():
-            base_prompt += f"\n[Text before cursor]: ...{context_before[-100:]}\n"
+            prompt += f"\n[Text before cursor]: ...{context_before[-100:]}\n"
 
-        base_prompt += f"\n[Dictated text to correct]: {text}\n"
+        prompt += f"\n[Dictated text to correct]: {text}\n"
 
         if context_after and context_after.strip():
-            base_prompt += f"\n[Text after cursor]: {context_after[:100]}...\n"
+            prompt += f"\n[Text after cursor]: {context_after[:100]}...\n"
 
-        base_prompt += "\nReturn only the corrected version of the dictated text:"
+        prompt += "\nReturn only the corrected version of the dictated text:"
 
-        return base_prompt
+        return prompt

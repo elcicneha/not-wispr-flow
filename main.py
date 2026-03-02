@@ -201,6 +201,9 @@ class AppState:
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
         self.use_type_mode = USE_TYPE_MODE  # False = clipboard paste (default), True = character-by-character
 
+        # LLM processing toggle (runtime state, separate from config default)
+        self.llm_enabled = LLM_ENABLED  # Can be toggled at runtime via menu bar
+
         # Transcription state tracking
         self.is_transcribing = False     # True when transcription thread is running
         self.transcription_start_time = None  # When transcription started (for hang detection)
@@ -804,20 +807,22 @@ def post_process(text, context_before, context_after, backend="unknown"):
         str: Post-processed text ready for insertion
     """
     # Step 1: LLM enhancement (optional, online only)
-    # LLM runs if: enabled AND backend is online (groq)
+    # LLM runs if: enabled (runtime toggle) AND backend is online (groq)
     # This respects the offline/online mode separation
     llm_time = 0.0
     original_text = text  # Save for logging
 
-    if state.llm_processor and state.llm_processor.enabled and backend == "groq":
+    if state.llm_enabled and state.llm_processor and state.llm_processor.enabled and backend == "groq":
         text, llm_time = state.llm_processor.process(text, context_before, context_after)
         if llm_time > 0:
             # Log LLM processing results (always visible, not just DEBUG)
             logger.info(f"LLM processing: {llm_time:.2f}s")
             logger.info(f"  Before: {original_text}")
             logger.info(f"  After:  {text}")
-    elif state.llm_processor and state.llm_processor.enabled and backend == "local":
+    elif state.llm_enabled and state.llm_processor and state.llm_processor.enabled and backend == "local":
         logger.debug("LLM processing skipped (local/offline transcription)")
+    elif not state.llm_enabled and backend == "groq":
+        logger.debug("LLM processing disabled by user toggle")
 
     # Step 2: Smart spacing (existing logic)
     # Only add a leading space if:
@@ -1282,9 +1287,10 @@ def acquire_pid_lock():
 # ============================================================================
 
 class MenuDelegate(NSObject):
-    """Handles all menu bar actions: Retype Last, Paste Mode toggle, Quit."""
+    """Handles all menu bar actions: Retype Last, Paste Mode toggle, LLM toggle, Quit."""
     shutdown_event = None
     paste_mode_item = None
+    llm_enabled_item = None
 
     def retypeLast_(self, sender):
         """Type last transcription character-by-character in a background thread."""
@@ -1308,6 +1314,16 @@ class MenuDelegate(NSObject):
         mode_name = "Type" if state.use_type_mode else "Paste"
         logger.info(f"Text insertion mode: {mode_name}")
 
+    def toggleLLM_(self, sender):
+        """Toggle LLM post-processing on/off."""
+        state.llm_enabled = not state.llm_enabled
+        if self.llm_enabled_item:
+            self.llm_enabled_item.setState_(
+                NSOnState if state.llm_enabled else NSOffState
+            )
+        status = "Enabled" if state.llm_enabled else "Disabled"
+        logger.info(f"LLM post-processing: {status}")
+
     def quit_(self, sender):
         if self.shutdown_event:
             self.shutdown_event.set()
@@ -1321,7 +1337,7 @@ class MenuDelegate(NSObject):
 
 
 def setup_menu_bar(shutdown_event):
-    """Create a menu bar status icon with Retype Last, Paste Mode toggle, and Quit."""
+    """Create a menu bar status icon with Retype Last, Paste Mode toggle, LLM toggle, and Quit."""
     app = NSApplication.sharedApplication()
 
     status_bar = NSStatusBar.systemStatusBar()
@@ -1355,6 +1371,15 @@ def setup_menu_bar(shutdown_event):
     paste_mode_item.setState_(NSOnState)
     delegate.paste_mode_item = paste_mode_item
     menu.addItem_(paste_mode_item)
+
+    # LLM toggle — checked based on LLM_ENABLED config
+    llm_enabled_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "LLM Enhancement", "toggleLLM:", ""
+    )
+    llm_enabled_item.setTarget_(delegate)
+    llm_enabled_item.setState_(NSOnState if LLM_ENABLED else NSOffState)
+    delegate.llm_enabled_item = llm_enabled_item
+    menu.addItem_(llm_enabled_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
 
@@ -1482,7 +1507,7 @@ def main():
     logger.info(f"    - Press [{hotkey_name}] + Space together, then speak")
     logger.info(f"    - Press [{hotkey_name}] again to stop and transcribe")
     logger.info("")
-    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, LLM={'ON' if LLM_ENABLED else 'OFF'}, Debug={'ON' if DEBUG else 'OFF'}")
+    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, LLM={'ON' if state.llm_enabled else 'OFF'} (toggle via menu), Debug={'ON' if DEBUG else 'OFF'}")
     logger.info("=" * 60)
     logger.info("")
 
