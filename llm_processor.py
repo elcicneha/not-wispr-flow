@@ -28,6 +28,33 @@ LLM_SYSTEM_PROMPT = """You are a text correction assistant for voice dictation. 
 5. Return ONLY the corrected text, no explanations or quotes
 """
 
+# ============================================================================
+# PROVIDER USAGE CONFIG
+# ============================================================================
+# Maps provider names to their response field paths for token usage extraction.
+# To add a new provider: add an entry with the attribute names on the response object.
+#
+PROVIDER_USAGE_CONFIG = {
+    "gemini": {
+        "usage_attr": "usage_metadata",
+        "input_field": "prompt_token_count",
+        "output_field": "candidates_token_count",
+        "daily_request_limit": 250,
+    },
+    "openai": {
+        "usage_attr": "usage",
+        "input_field": "prompt_tokens",
+        "output_field": "completion_tokens",
+        "daily_request_limit": 500,
+    },
+    # "anthropic": {
+    #     "usage_attr": "usage",
+    #     "input_field": "input_tokens",
+    #     "output_field": "output_tokens",
+    #     "daily_request_limit": 1000,
+    # },
+}
+
 
 class LLMProcessor:
     """
@@ -40,7 +67,7 @@ class LLMProcessor:
     - Fallback to original text on errors
     """
 
-    def __init__(self, api_key: str, model: str, enabled: bool, logger):
+    def __init__(self, api_key: str, model: str, enabled: bool, logger, provider: str = "gemini"):
         """
         Initialize LLM processor.
 
@@ -49,12 +76,21 @@ class LLMProcessor:
             model: Gemini model name (e.g., "gemini-2.0-flash-exp")
             enabled: Whether LLM processing is enabled
             logger: Logger instance
+            provider: Provider name matching a key in PROVIDER_USAGE_CONFIG
         """
         self.enabled = enabled
         self.logger = logger
         self._api_key = self._resolve_api_key(api_key, logger)
         self._model = model
         self._client = None
+
+        # Usage tracking
+        self._provider = provider
+        self._provider_config = PROVIDER_USAGE_CONFIG.get(provider, {})
+        self._daily_requests = 0
+        self._daily_input_tokens = 0
+        self._daily_output_tokens = 0
+        self._tracking_date = time.strftime("%Y-%m-%d")
 
         if not self.enabled:
             self.logger.info("LLM post-processing: Disabled")
@@ -63,7 +99,7 @@ class LLMProcessor:
             self.logger.warning("Set GEMINI_API_KEY environment variable or save to ~/.config/notwisprflow/gemini_api_key")
             self.enabled = False
         else:
-            self.logger.info(f"LLM post-processing: Enabled (model: {self._model})")
+            self.logger.info(f"LLM post-processing: Enabled (model: {self._model}, provider: {self._provider})")
 
     @staticmethod
     def _resolve_api_key(config_key: str, logger) -> str:
@@ -155,16 +191,30 @@ class LLMProcessor:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.3,  # Lower temperature for more consistent corrections
-                    max_output_tokens=500,
                 )
             )
 
             processed_text = response.text.strip()
             processing_time = time.time() - start_time
 
-            # Validate output isn't empty or dramatically different
+            # Track usage (async-safe: in-memory counters only)
+            self._track_usage(self._extract_token_usage(response))
+
+            # Validate output
             if not processed_text:
                 self.logger.warning("LLM returned empty response, using original text")
+                return text, processing_time
+
+            if len(processed_text) < len(text) * 0.5:
+                self.logger.warning(
+                    f"LLM output appears truncated ({len(processed_text)} chars vs {len(text)} input chars), using original text"
+                )
+                return text, processing_time
+
+            if len(processed_text) > len(text) * 3:
+                self.logger.warning(
+                    f"LLM output unexpectedly long ({len(processed_text)} chars vs {len(text)} input chars), using original text"
+                )
                 return text, processing_time
 
             return processed_text, processing_time
@@ -173,6 +223,53 @@ class LLMProcessor:
             processing_time = time.time() - start_time
             self.logger.warning(f"LLM processing failed ({e}), using original text")
             return text, processing_time
+
+    def _extract_token_usage(self, response) -> dict:
+        """Extract token counts from LLM response using provider config."""
+        if not self._provider_config:
+            return {}
+        try:
+            usage_obj = getattr(response, self._provider_config["usage_attr"], None)
+            if usage_obj is None:
+                return {}
+            input_tokens = getattr(usage_obj, self._provider_config["input_field"], 0)
+            output_tokens = getattr(usage_obj, self._provider_config["output_field"], 0)
+            return {"input": input_tokens or 0, "output": output_tokens or 0}
+        except Exception:
+            return {}
+
+    def _track_usage(self, token_usage: dict):
+        """Track daily API usage and warn when approaching free tier limits."""
+        # Reset counters on new day
+        today = time.strftime("%Y-%m-%d")
+        if today != self._tracking_date:
+            self._daily_requests = 0
+            self._daily_input_tokens = 0
+            self._daily_output_tokens = 0
+            self._tracking_date = today
+
+        self._daily_requests += 1
+        self._daily_input_tokens += token_usage.get("input", 0)
+        self._daily_output_tokens += token_usage.get("output", 0)
+
+        self.logger.debug(
+            f"LLM usage: req #{self._daily_requests} today | "
+            f"tokens in={token_usage.get('input', '?')} out={token_usage.get('output', '?')} | "
+            f"daily total in={self._daily_input_tokens} out={self._daily_output_tokens}"
+        )
+
+        daily_limit = self._provider_config.get("daily_request_limit")
+        if daily_limit:
+            usage_pct = self._daily_requests / daily_limit
+            if usage_pct >= 0.95:
+                self.logger.critical(
+                    f"Near free tier limit ({self._daily_requests}/{daily_limit} daily requests). "
+                    f"Charges may apply soon."
+                )
+            elif usage_pct >= 0.80:
+                self.logger.warning(
+                    f"Approaching free tier limit ({self._daily_requests}/{daily_limit} daily requests)"
+                )
 
     def _build_prompt(self, text: str, context_before: Optional[str],
                      context_after: Optional[str]) -> str:
