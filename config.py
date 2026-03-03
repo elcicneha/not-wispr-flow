@@ -218,6 +218,15 @@ LLM_PROMPT = "detailed"
 USE_TYPE_MODE = False
 
 # ============================================================================
+# PAUSE MEDIA DURING RECORDING
+# ============================================================================
+# Automatically pause media (Spotify, Apple Music) when recording starts,
+# and resume when transcription completes.
+# You can toggle at runtime via the menu bar "Pause Media" item.
+#
+PAUSE_MEDIA_ON_RECORD = True
+
+# ============================================================================
 # DEBUGGING
 # ============================================================================
 # Enable verbose logging (writes to ~/Library/Logs/NotWisprFlow/notwisprflow.log)

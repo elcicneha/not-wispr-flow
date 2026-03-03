@@ -48,6 +48,7 @@ There are no automated tests. Manual testing requires running the app and dictat
 - **`config.py`** — User-facing settings (model, hotkeys, transcription mode, Groq API key)
 - **`transcription.py`** — All transcription logic: `TranscriptionManager` class, MLX Whisper backend, Groq API client, Silero VAD, connectivity monitoring, model lifecycle management
 - **`main.py`** — App shell: AppState, keyboard handling, audio capture, menu bar, health monitor, entry point
+- **`media_control.py`** — Media pause/resume via macOS private `MediaRemote.framework` (ctypes)
 
 ### Key Components
 1. **`TranscriptionManager`** — Unified transcription interface in `transcription.py`. Handles mode selection (offline/online/auto), Groq API calls, local MLX Whisper, VAD, and background model load/unload
@@ -55,7 +56,8 @@ There are no automated tests. Manual testing requires running the app and dictat
 3. **Audio Pipeline** — `sounddevice.InputStream` → numpy buffer (lock-free deque) → `TranscriptionManager.contains_speech()` → `TranscriptionManager.transcribe()` → clipboard paste (default)
 4. **Smart Model Management** — In auto mode, a background connectivity monitor unloads the local model after 60s stable internet (frees ~2.3GB RAM) and pre-loads it immediately when connectivity drops
 5. **Keyboard Handling** — `pynput.Listener` with `on_press`/`on_release` callbacks implementing a state machine with stuck-state recovery
-6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager`, plus `MenuDelegate` for Retype Last, Paste Mode toggle, LLM Enhancement toggle, and Quit
+6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager`, plus `MenuDelegate` for Retype Last, Paste Mode toggle, Pause Media toggle, LLM Model picker submenu, and Quit
+10. **Media Control** — `media_control.py` uses `MRMediaRemoteSendCommand` from macOS private `MediaRemote.framework` via ctypes to send PAUSE/PLAY commands to whatever app is the system Now Playing source. Runs async in background thread from `start_recording()`; resumes in `_transcription_wrapper()` finally block
 7. **Cursor Context** — `get_cursor_context()` reads text around cursor via macOS Accessibility APIs for smart spacing
 8. **Buffer Overflow** — Long recordings flush to `.npy` files on disk when buffer exceeds threshold; reassembled at transcription time
 9. **Health Monitor** — Background thread detecting dead audio streams, stuck keys, and triggering buffer flushes
@@ -101,9 +103,12 @@ TOGGLE_KEY = Key.space                # Combine with hotkey for toggle mode
 TRANSCRIPTION_MODE = "auto"           # "auto", "offline", or "online"
 GROQ_API_KEY = ""                     # Required for "online", optional for "auto"
 GROQ_MODEL = "whisper-large-v3-turbo" # Groq Whisper model
-LLM_ENABLED = True                    # Enable LLM post-processing (default state)
-GEMINI_MODEL = "gemini-2.5-flash"     # Gemini model for LLM enhancement
+LLM_MODEL = "gemini-2.5-flash"        # LLM model for text enhancement (or "disabled")
+LLM_TEMPERATURE = 0.3                # LLM temperature (0.0-1.0)
+LLM_SYSTEM_PROMPT = "..."            # System prompt for text enhancement
+LLM_MODELS = { ... }                 # All available models (single source of truth)
 USE_TYPE_MODE = False                 # False = paste mode (default), True = type mode
+PAUSE_MEDIA_ON_RECORD = True          # Pause system media during recording
 DEBUG = False                         # Verbose logging
 ```
 
@@ -127,7 +132,8 @@ CONTEXT_CHARS = 200              # Context window for cursor context
 - **MLX operations are pinned to a single thread** — `TranscriptionManager` spawns a dedicated MLX worker thread with a queue; all Metal/MLX calls happen there to avoid threading assertions
 - **Groq API** sends audio as WAV bytes over HTTPS; timeout is 10s; free tier allows 20 requests/min, 2000/day
 - **Text insertion uses clipboard paste by default** — controlled by `USE_TYPE_MODE` in config.py (False = paste, True = type). `insert_text()` saves/restores clipboard via `NSPasteboard`, restores immediately to avoid clipboard manager capture. Toggle at runtime via menu bar "Paste Mode" item
-- **LLM post-processing** — controlled by `LLM_ENABLED` in config.py (default state). Can be toggled at runtime via menu bar "LLM Enhancement" item. LLM only runs when using online transcription (Groq backend), never with local/offline transcription
+- **LLM post-processing** — controlled by `LLM_MODEL` in config.py (set to `"disabled"` to turn off). Model can be switched at runtime via menu bar "LLM Model" submenu. Selection persists in `~/.config/notwisprflow/preferences.json`. Supports Gemini and Groq providers. LLM only runs when using online transcription (Groq backend), never with local/offline transcription. All model definitions live in `LLM_MODELS` dict in config.py (single source of truth)
+- **Media pause/resume** — controlled by `PAUSE_MEDIA_ON_RECORD` in config.py. Uses macOS private `MediaRemote.framework` via ctypes to send `MRMediaRemoteSendCommand(PAUSE)` and `MRMediaRemoteSendCommand(PLAY)` — works with any app registered as the system Now Playing source (Spotify, YouTube in browser, VLC, podcasts, etc.). Pause is async (background thread) to avoid delaying recording start. Toggle at runtime via menu bar "Pause Media While Recording" item. Setting persists in `~/.config/notwisprflow/preferences.json`
 - **Exit code 0** on fatal errors is intentional — prevents LaunchAgent `KeepAlive` restart loops
 - **PID file lock** (`~/Library/Logs/NotWisprFlow/notwisprflow.pid`) prevents duplicate instances
 - **Audio callback must never block** — uses lock-free `deque.append()` (GIL-atomic); any blocking I/O in the callback hangs `stream.stop()`

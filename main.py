@@ -39,7 +39,8 @@ from ApplicationServices import (
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSOnState, NSOffState,
-    NSImage, NSPasteboard, NSPasteboardItem
+    NSImage, NSPasteboard, NSPasteboardItem,
+    NSEventModifierFlagControl, NSEventModifierFlagCommand
 )
 
 # ============================================================================
@@ -48,9 +49,11 @@ from AppKit import (
 from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
                     TRANSCRIPTION_MODE, GROQ_MODEL,
                     LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
-                    LLM_PROMPT, LLM_PROMPTS, USE_TYPE_MODE)
+                    LLM_PROMPT, LLM_PROMPTS, USE_TYPE_MODE,
+                    PAUSE_MEDIA_ON_RECORD)
 from transcription import TranscriptionManager
 from llm_processor import LLMProcessor, load_preference, save_preference
+from media_control import pause_media, resume_media
 
 # ============================================================================
 # Logging Configuration
@@ -206,6 +209,7 @@ class AppState:
         self.llm_model = load_preference("llm_model", LLM_MODEL)
         self.llm_prompt = load_preference("llm_prompt", LLM_PROMPT)
 
+
         # Transcription state tracking
         self.is_transcribing = False     # True when transcription thread is running
         self.transcription_start_time = None  # When transcription started (for hang detection)
@@ -217,6 +221,9 @@ class AppState:
         self.overflow_files = []        # Paths to flushed .npy temp files for current recording
         self.overflow_file_counter = 0  # Unique filename counter per recording
         self.recording_start_time = None  # For stats tracking
+
+        # Media pause/resume during recording
+        self.media_was_paused = False  # True if we paused media (so we know to resume)
 
 
 # Global state instance
@@ -443,6 +450,14 @@ def start_recording():
         state.is_recording = True
         update_menu_bar_icon('recording')
         logger.debug(f"Recording started - Mode: {state.mode}")
+
+        # Pause media in background (don't block recording start)
+        if PAUSE_MEDIA_ON_RECORD and not state.media_was_paused:
+            def _pause_media_async():
+                if pause_media(logger):
+                    with state.lock:
+                        state.media_was_paused = True
+            threading.Thread(target=_pause_media_async, daemon=True).start()
     except Exception:
         # Guarantee clean state on failure
         _cleanup_stream()
@@ -591,6 +606,10 @@ def stop_recording():
 
     if not buffer_snapshot and not overflow_snapshot:
         logger.debug("Recording stopped - empty buffer, skipping transcription")
+        # Resume media if we paused it
+        if state.media_was_paused:
+            state.media_was_paused = False
+            threading.Thread(target=resume_media, args=(logger,), daemon=True).start()
         update_menu_bar_icon('idle')
         return
 
@@ -634,6 +653,13 @@ def _transcription_wrapper(audio_buffer, **kwargs):
     finally:
         state.is_transcribing = False
         state.transcription_start_time = None
+        # Resume media if we paused it and not already recording again
+        with state.lock:
+            should_resume = state.media_was_paused and not state.is_recording
+            if should_resume:
+                state.media_was_paused = False
+        if should_resume:
+            resume_media(logger)
         update_menu_bar_icon('idle')  # Reset to 🎤 icon
 
 
@@ -1389,8 +1415,9 @@ def setup_menu_bar(shutdown_event):
 
     # Retype Last — grayed out when no transcription available
     retype_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Retype last transcript", "retypeLast:", ""
+        "Retype last transcript", "retypeLast:", "c"
     )
+    retype_item.setKeyEquivalentModifierMask_(NSEventModifierFlagControl | NSEventModifierFlagCommand)
     retype_item.setTarget_(delegate)
     menu.addItem_(retype_item)
 
