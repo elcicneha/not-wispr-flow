@@ -40,7 +40,7 @@ WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 # NOTE: Forcing "en" on Hindi/Punjabi may produce romanized output (Hinglish) but results
 # are inconsistent. For reliable Hinglish, use language="hi" + transliteration library.
 #
-LANGUAGE = None
+LANGUAGE = "en"
 
 # ============================================================================
 # HOTKEY CONFIGURATION
@@ -90,32 +90,117 @@ TRANSCRIPTION_MODE = "auto"
 
 # GROQ_MODEL: Whisper model to use on Groq's API
 #
-GROQ_MODEL = "whisper-large-v3-turbo"
+GROQ_MODEL = "whisper-large-v3"
 
 # ============================================================================
 # LLM POST-PROCESSING (Optional Enhancement)
 # ============================================================================
-# Enable LLM-based text enhancement for transcriptions
-#   True  - Send transcriptions to Gemini for grammar/punctuation correction
-#   False - Use raw Whisper output (faster, no API calls)
+# LLM-based text enhancement for transcriptions.
+# Adds ~0.5-2s latency but significantly improves quality.
 #
 # IMPORTANT: LLM processing requires internet connectivity
 # - In "offline" mode: LLM is automatically disabled (no online operations)
 # - In "online" mode: LLM runs if enabled and API key is present
-# - In "auto" mode: LLM runs when using Groq (online), skipped when using local Whisper (offline fallback)
+# - In "auto" mode: LLM runs when using Groq (online), skipped on local fallback
 #
-# Note: LLM processing adds ~0.5-2s latency but significantly improves quality
-# Privacy: When enabled, transcribed text is sent to Google's Gemini API
+# API Keys:
+#   Gemini: GEMINI_API_KEY env var or ~/.config/notwisprflow/gemini_api_key
+#           Get a free key at https://aistudio.google.com/app/apikey
+#   Groq:   Reuses the same GROQ_API_KEY used for Whisper transcription
 #
-# API Key: Set via GEMINI_API_KEY environment variable or save to ~/.config/notwisprflow/gemini_api_key
-# Get a free key at https://aistudio.google.com/app/apikey
-LLM_ENABLED = True
+# To add/remove a model, edit only this dict. The menu bar and LLM processor
+# both read from here automatically.
+#
+LLM_MODELS = {
+    "disabled": {"provider": None, "display": "Disabled", "group": None},
+    # Gemini models
+    "gemini-2.5-flash": {"provider": "gemini", "display": "Gemini Flash (Fast)", "group": "Gemini"},
+    "gemini-2.5-pro": {"provider": "gemini", "display": "Gemini Pro (Best)", "group": "Gemini"},
+    # Groq LLM models (uses same API key as Whisper transcription)
+    "llama-3.3-70b-versatile": {"provider": "groq", "display": "Groq Llama 3.3 70B (Best)", "group": "Groq"},
+    "llama-3.1-70b-versatile": {"provider": "groq", "display": "Groq Llama 3.1 70B", "group": "Groq"},
+    "llama-3.1-8b-instant": {"provider": "groq", "display": "Groq Llama 3.1 8B (Fastest)", "group": "Groq"},
+}
 
-# GEMINI_MODEL: Gemini model to use for text enhancement
-#   "gemini-2.5-flash"      - Latest, fastest (recommended for real-time use ~500-800ms)
-#   "gemini-2.0-flash"      - Previous generation, still fast (~600-900ms)
-#   "gemini-2.5-pro"        - Highest quality (slower, costs more) (~1500-2500ms)
-GEMINI_MODEL = "gemini-2.5-flash"
+# LLM_MODEL: Default model selection (must be a key from LLM_MODELS above)
+# Set to "disabled" to turn off LLM processing entirely.
+# Can be changed at runtime via the menu bar "LLM Model" submenu.
+LLM_MODEL = "disabled"
+
+# LLM_TEMPERATURE: Controls creativity vs consistency (0.0-1.0)
+# Lower = more consistent corrections, higher = more creative rewrites
+LLM_TEMPERATURE = 0.3
+
+# LLM_PROMPTS: Prompt presets for text enhancement.
+# To add/remove a prompt style, edit only this dict.
+# Each entry needs: display (menu label), system (system prompt),
+# user_with_context and user_no_context (user prompt templates).
+# Templates use {transcription}, {context_before}, {context_after} placeholders.
+#
+LLM_PROMPTS = {
+    "minimal": {
+        "display": "Minimal",
+        "system": (
+            'Fix capitalization, punctuation, remove fillers (um/uh/like). '
+            'Handle self-corrections (e.g. "five no wait six" -> "six"). '
+            'Return only cleaned text, no quotes, no context, only the part that goes in the blank.'
+        ),
+        "user_with_context": '"{context_before} ___ {context_after}"\n\nFill the blank: "{transcription}"',
+        "user_no_context": 'Clean: "{transcription}"',
+    },
+    "detailed": {
+        "display": "Detailed",
+        "system": """\
+You are a deterministic text cleanup engine.
+
+Your task is to clean raw speech-to-text transcription so that it fits naturally \
+into an existing document at a specific cursor position.
+
+You are NOT allowed to:
+- Add new meaning
+- Summarize
+- Rephrase stylistically
+- Add content that was not spoken
+- Remove content unless it is clearly a speech self-correction
+
+You must:
+- Apply proper capitalization
+- Apply correct punctuation
+- Resolve spoken self-corrections
+- Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
+- Preserve wording as much as possible
+- Make the text grammatically consistent with surrounding context
+
+Rules:
+- If inserting mid-sentence, do NOT capitalize the first word unless grammatically required
+- If inserting at the beginning of a sentence, capitalize appropriately
+- If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
+- If a sentence is unfinished and clearly abandoned, remove the abandoned fragment
+- Match punctuation style of surrounding text
+- If the insertion connects two sentence fragments, ensure final output flows naturally \
+into TEXT_AFTER_CURSOR
+
+Do not output anything except the cleaned insertion text.
+Never include explanations.
+Output only the corrected insertion text.""",
+        "user_with_context": """\
+TEXT_BEFORE_CURSOR: "{context_before}"
+
+RAW_TRANSCRIPTION: "{transcription}"
+
+TEXT_AFTER_CURSOR: "{context_after}"
+
+Output only the cleaned insertion text.""",
+        "user_no_context": """\
+RAW_TRANSCRIPTION: "{transcription}"
+
+Output only the cleaned insertion text.""",
+    },
+}
+
+# LLM_PROMPT: Default prompt style (must be a key from LLM_PROMPTS above)
+# Can be changed at runtime via the menu bar "LLM Prompt" submenu.
+LLM_PROMPT = "detailed"
 
 # ============================================================================
 # TEXT INSERTION MODE

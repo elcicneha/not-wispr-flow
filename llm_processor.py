@@ -2,38 +2,57 @@
 """
 LLM Post-Processing for Not Wispr Flow.
 
-Provides intelligent text enhancement using Gemini API:
-- Grammar correction
-- Punctuation improvement
-- Natural language refinement
-- Context-aware formatting
+Provides intelligent text enhancement using multiple providers:
+- Google Gemini API
+- Groq API (chat completions with Llama models)
+
+All model definitions live in config.py (LLM_MODELS dict).
 """
 
+import json
 import os
 import time
 from typing import Optional, Tuple
 
-# ============================================================================
-# LLM PROMPT TEMPLATE
-# ============================================================================
-# This prompt is sent to Gemini to enhance transcribed text.
-# Customize this to change how the LLM processes your dictations.
-#
-LLM_SYSTEM_PROMPT = """You are a text correction assistant for voice dictation. Your task is to:
+from config import LLM_MODELS, LLM_PROMPTS
 
-1. Fix grammar and punctuation errors
-2. Correct obvious transcription mistakes (e.g., "their" → "there" if contextually wrong)
-3. Preserve the original meaning, tone, and intent
-4. Keep informal language if that's the speaker's style
-5. Return ONLY the corrected text, no explanations or quotes
-"""
+# ============================================================================
+# PREFERENCES PERSISTENCE
+# ============================================================================
+_PREFS_DIR = os.path.expanduser("~/.config/notwisprflow")
+_PREFS_FILE = os.path.join(_PREFS_DIR, "preferences.json")
+
+
+def load_preference(key: str, default=None):
+    """Load a single preference from ~/.config/notwisprflow/preferences.json."""
+    try:
+        if os.path.exists(_PREFS_FILE):
+            with open(_PREFS_FILE, "r") as f:
+                prefs = json.load(f)
+            return prefs.get(key, default)
+    except Exception:
+        pass
+    return default
+
+
+def save_preference(key: str, value):
+    """Save a single preference to ~/.config/notwisprflow/preferences.json."""
+    try:
+        os.makedirs(_PREFS_DIR, exist_ok=True)
+        prefs = {}
+        if os.path.exists(_PREFS_FILE):
+            with open(_PREFS_FILE, "r") as f:
+                prefs = json.load(f)
+        prefs[key] = value
+        with open(_PREFS_FILE, "w") as f:
+            json.dump(prefs, f, indent=2)
+    except Exception:
+        pass
+
 
 # ============================================================================
 # PROVIDER USAGE CONFIG
 # ============================================================================
-# Maps provider names to their response field paths for token usage extraction.
-# To add a new provider: add an entry with the attribute names on the response object.
-#
 PROVIDER_USAGE_CONFIG = {
     "gemini": {
         "usage_attr": "usage_metadata",
@@ -41,89 +60,127 @@ PROVIDER_USAGE_CONFIG = {
         "output_field": "candidates_token_count",
         "daily_request_limit": 250,
     },
-    "openai": {
+    "groq": {
         "usage_attr": "usage",
         "input_field": "prompt_tokens",
         "output_field": "completion_tokens",
         "daily_request_limit": 500,
     },
-    # "anthropic": {
-    #     "usage_attr": "usage",
-    #     "input_field": "input_tokens",
-    #     "output_field": "output_tokens",
-    #     "daily_request_limit": 1000,
-    # },
 }
 
 
 class LLMProcessor:
     """
-    Handles LLM-based post-processing of transcriptions using Gemini API.
+    Handles LLM-based post-processing of transcriptions.
 
-    Features:
-    - Grammar and punctuation correction
-    - Natural language refinement
-    - Configurable processing modes
-    - Fallback to original text on errors
+    Supports multiple providers (Gemini, Groq) with runtime model switching.
+    Provider is inferred from the model name via LLM_MODELS in config.py.
     """
 
-    def __init__(self, api_key: str, model: str, enabled: bool, logger, provider: str = "gemini"):
+    def __init__(self, model: str, temperature: float, prompt: str, logger):
         """
         Initialize LLM processor.
 
         Args:
-            api_key: Gemini API key (empty string to resolve from env/dotfile)
-            model: Gemini model name (e.g., "gemini-2.0-flash-exp")
-            enabled: Whether LLM processing is enabled
+            model: Model name (key from LLM_MODELS in config.py)
+            temperature: LLM temperature (0.0-1.0)
+            prompt: Prompt preset name (key from LLM_PROMPTS in config.py)
             logger: Logger instance
-            provider: Provider name matching a key in PROVIDER_USAGE_CONFIG
         """
-        self.enabled = enabled
         self.logger = logger
-        self._api_key = self._resolve_api_key(api_key, logger)
-        self._model = model
-        self._client = None
+        self._temperature = temperature
+        self._prompt_name = prompt
+        self._prompt_config = LLM_PROMPTS.get(prompt, {})
 
-        # Usage tracking
-        self._provider = provider
-        self._provider_config = PROVIDER_USAGE_CONFIG.get(provider, {})
+        # Resolve API keys for both providers at init (so switching is instant)
+        self._gemini_api_key = self._resolve_gemini_api_key(logger)
+        self._groq_api_key = self._resolve_groq_api_key(logger)
+
+        # Lazy-initialized clients (one per provider)
+        self._gemini_client = None
+        self._groq_client = None
+
+        # Usage tracking (per-provider)
         self._daily_requests = 0
         self._daily_input_tokens = 0
         self._daily_output_tokens = 0
         self._tracking_date = time.strftime("%Y-%m-%d")
 
-        if not self.enabled:
-            self.logger.info("LLM post-processing: Disabled")
-        elif self.enabled and not self._api_key:
-            self.logger.warning("LLM processing enabled but no Gemini API key found. Disabling LLM processing.")
-            self.logger.warning("Set GEMINI_API_KEY environment variable or save to ~/.config/notwisprflow/gemini_api_key")
-            self.enabled = False
-        else:
-            self.logger.info(f"LLM post-processing: Enabled (model: {self._model}, provider: {self._provider})")
+        # Set initial model (also sets self._provider, self.enabled)
+        self._model = None
+        self._provider = None
+        self.enabled = False
+        self.switch_model(model, log=True)
 
-    @staticmethod
-    def _resolve_api_key(config_key: str, logger) -> str:
+    def switch_model(self, model: str, log: bool = True):
         """
-        Resolve Gemini API key from env var → dotfile.
-
-        Priority:
-        1. GEMINI_API_KEY environment variable
-        2. ~/.config/notwisprflow/gemini_api_key file
+        Switch to a different LLM model at runtime.
 
         Args:
-            config_key: API key from config (ignored, kept for API compatibility)
-            logger: Logger instance for logging key source
-
-        Returns:
-            str: Resolved API key or empty string
+            model: Model name (key from LLM_MODELS in config.py)
+            log: Whether to log the switch
         """
-        # Check environment variable first
+        model_info = LLM_MODELS.get(model)
+        if model_info is None:
+            self.logger.warning(f"Unknown LLM model '{model}', disabling LLM")
+            model = "disabled"
+            model_info = LLM_MODELS["disabled"]
+
+        self._model = model
+        self._provider = model_info["provider"]
+
+        if self._provider is None:
+            self.enabled = False
+            if log:
+                self.logger.info("LLM post-processing: Disabled")
+        elif self._provider == "gemini" and not self._gemini_api_key:
+            self.enabled = False
+            if log:
+                self.logger.warning(
+                    "LLM model requires Gemini API key but none found. "
+                    "Set GEMINI_API_KEY env var or save to ~/.config/notwisprflow/gemini_api_key"
+                )
+        elif self._provider == "groq" and not self._groq_api_key:
+            self.enabled = False
+            if log:
+                self.logger.warning(
+                    "LLM model requires Groq API key but none found. "
+                    "Set GROQ_API_KEY env var or save to ~/.config/notwisprflow/api_key"
+                )
+        else:
+            self.enabled = True
+            if log:
+                self.logger.info(
+                    f"LLM post-processing: Enabled "
+                    f"(model: {self._model}, provider: {self._provider})"
+                )
+
+    def switch_prompt(self, prompt_name: str):
+        """Switch to a different prompt preset at runtime."""
+        prompt_config = LLM_PROMPTS.get(prompt_name)
+        if prompt_config is None:
+            self.logger.warning(f"Unknown LLM prompt '{prompt_name}', keeping current")
+            return
+        self._prompt_name = prompt_name
+        self._prompt_config = prompt_config
+        self.logger.info(f"LLM prompt switched to: {prompt_config['display']} ({prompt_name})")
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def prompt_name(self) -> str:
+        return self._prompt_name
+
+    @staticmethod
+    def _resolve_gemini_api_key(logger) -> str:
+        """Resolve Gemini API key from env var or dotfile."""
         env_key = os.environ.get("GEMINI_API_KEY", "")
         if env_key:
             logger.info("Gemini API key: found in environment variable")
             return env_key
 
-        # Check dotfile
         key_file = os.path.expanduser("~/.config/notwisprflow/gemini_api_key")
         if os.path.exists(key_file):
             try:
@@ -137,68 +194,86 @@ class LLMProcessor:
 
         return ""
 
-    def _initialize_client(self):
+    @staticmethod
+    def _resolve_groq_api_key(logger) -> str:
+        """Resolve Groq API key from env var or dotfile (same key as Whisper transcription)."""
+        env_key = os.environ.get("GROQ_API_KEY", "")
+        if env_key:
+            logger.info("Groq LLM API key: found in environment variable")
+            return env_key
+
+        key_file = os.path.expanduser("~/.config/notwisprflow/api_key")
+        if os.path.exists(key_file):
+            try:
+                with open(key_file, "r") as f:
+                    key = f.read().strip()
+                if key:
+                    logger.info(f"Groq LLM API key: found in {key_file}")
+                    return key
+            except Exception as e:
+                logger.warning(f"Failed to read Groq API key from {key_file}: {e}")
+
+        return ""
+
+    # ── Client initialization ──────────────────────────────────────────────
+
+    def _get_gemini_client(self):
         """Lazy initialization of Gemini client."""
-        if self._client is None and self._api_key:
+        if self._gemini_client is None and self._gemini_api_key:
             try:
                 from google import genai
-
-                # Debug: log API key info (first/last 4 chars only for security)
-                key_preview = f"{self._api_key[:4]}...{self._api_key[-4:]}" if len(self._api_key) > 8 else "***"
-                self.logger.debug(f"Configuring Gemini with API key: {key_preview} (length: {len(self._api_key)})")
-
-                self._client = genai.Client(api_key=self._api_key)
+                self._gemini_client = genai.Client(api_key=self._gemini_api_key)
                 self.logger.info(f"Gemini LLM client initialized: {self._model}")
             except Exception as e:
                 import traceback
                 self.logger.error(f"Failed to initialize Gemini client: {e}")
                 self.logger.error(f"Traceback: {traceback.format_exc()}")
                 self.enabled = False
+        return self._gemini_client
+
+    def _get_groq_client(self):
+        """Lazy initialization of Groq client."""
+        if self._groq_client is None and self._groq_api_key:
+            try:
+                from groq import Groq
+                self._groq_client = Groq(api_key=self._groq_api_key, timeout=10.0)
+                self.logger.info(f"Groq LLM client initialized: {self._model}")
+            except Exception as e:
+                import traceback
+                self.logger.error(f"Failed to initialize Groq client: {e}")
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
+                self.enabled = False
+        return self._groq_client
+
+    # ── Processing ─────────────────────────────────────────────────────────
 
     def process(self, text: str, context_before: Optional[str] = None,
                 context_after: Optional[str] = None) -> Tuple[str, float]:
         """
         Process transcribed text through LLM for enhancement.
 
-        Args:
-            text: Raw transcribed text
-            context_before: Text before cursor (for context-aware processing)
-            context_after: Text after cursor (for context-aware processing)
-
         Returns:
-            Tuple of (processed_text, processing_time_seconds)
-            Returns original text if processing fails or is disabled
+            Tuple of (processed_text, processing_time_seconds).
+            Returns original text if processing fails or is disabled.
         """
-        if not self.enabled:
+        if not self.enabled or self._provider is None:
             return text, 0.0
 
         start_time = time.time()
 
         try:
-            self._initialize_client()
-
-            if self._client is None:
+            if self._provider == "gemini":
+                processed_text, response = self._process_gemini(text, context_before, context_after)
+            elif self._provider == "groq":
+                processed_text, response = self._process_groq(text, context_before, context_after)
+            else:
                 return text, 0.0
 
-            # Build prompt with context if available
-            prompt = self._build_prompt(text, context_before, context_after)
-
-            # Call Gemini API (new google-genai package)
-            from google.genai import types
-
-            response = self._client.models.generate_content(
-                model=self._model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.3,  # Lower temperature for more consistent corrections
-                )
-            )
-
-            processed_text = response.text.strip()
             processing_time = time.time() - start_time
 
-            # Track usage (async-safe: in-memory counters only)
-            self._track_usage(self._extract_token_usage(response))
+            # Track usage
+            if response is not None:
+                self._track_usage(self._extract_token_usage(response))
 
             # Validate output
             if not processed_text:
@@ -207,13 +282,15 @@ class LLMProcessor:
 
             if len(processed_text) < len(text) * 0.5:
                 self.logger.warning(
-                    f"LLM output appears truncated ({len(processed_text)} chars vs {len(text)} input chars), using original text"
+                    f"LLM output appears truncated ({len(processed_text)} chars vs "
+                    f"{len(text)} input chars), using original text"
                 )
                 return text, processing_time
 
             if len(processed_text) > len(text) * 3:
                 self.logger.warning(
-                    f"LLM output unexpectedly long ({len(processed_text)} chars vs {len(text)} input chars), using original text"
+                    f"LLM output unexpectedly long ({len(processed_text)} chars vs "
+                    f"{len(text)} input chars), using original text"
                 )
                 return text, processing_time
 
@@ -224,23 +301,93 @@ class LLMProcessor:
             self.logger.warning(f"LLM processing failed ({e}), using original text")
             return text, processing_time
 
+    def _process_gemini(self, text: str, context_before: Optional[str],
+                        context_after: Optional[str]) -> Tuple[str, object]:
+        """Call Gemini API for text enhancement."""
+        client = self._get_gemini_client()
+        if client is None:
+            return text, None
+
+        prompt = self._build_prompt(text, context_before, context_after)
+
+        from google.genai import types
+        response = client.models.generate_content(
+            model=self._model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=self._temperature,
+            )
+        )
+
+        return response.text.strip(), response
+
+    def _process_groq(self, text: str, context_before: Optional[str],
+                      context_after: Optional[str]) -> Tuple[str, object]:
+        """Call Groq chat completions API for text enhancement."""
+        client = self._get_groq_client()
+        if client is None:
+            return text, None
+
+        user_prompt = self._build_user_prompt(text, context_before, context_after)
+
+        system_prompt = self._prompt_config.get("system", "")
+
+        response = client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=self._temperature,
+        )
+
+        return response.choices[0].message.content.strip(), response
+
+    # ── Prompt building ────────────────────────────────────────────────────
+
+    def _build_prompt(self, text: str, context_before: Optional[str],
+                      context_after: Optional[str]) -> str:
+        """Build combined prompt for Gemini (system + user in one string)."""
+        system = self._prompt_config.get("system", "")
+        user = self._build_user_prompt(text, context_before, context_after)
+        return system + "\n\n" + user
+
+    def _build_user_prompt(self, text: str, context_before: Optional[str],
+                           context_after: Optional[str]) -> str:
+        """Build user message from prompt template."""
+        has_context = (context_before and context_before.strip()) or \
+                      (context_after and context_after.strip())
+
+        if has_context:
+            template = self._prompt_config.get("user_with_context", 'Clean: "{transcription}"')
+        else:
+            template = self._prompt_config.get("user_no_context", 'Clean: "{transcription}"')
+
+        return template.format(
+            transcription=text,
+            context_before=(context_before[-100:] if context_before else ""),
+            context_after=(context_after[:100] if context_after else ""),
+        )
+
+    # ── Usage tracking ─────────────────────────────────────────────────────
+
     def _extract_token_usage(self, response) -> dict:
         """Extract token counts from LLM response using provider config."""
-        if not self._provider_config:
+        config = PROVIDER_USAGE_CONFIG.get(self._provider, {})
+        if not config:
             return {}
         try:
-            usage_obj = getattr(response, self._provider_config["usage_attr"], None)
+            usage_obj = getattr(response, config["usage_attr"], None)
             if usage_obj is None:
                 return {}
-            input_tokens = getattr(usage_obj, self._provider_config["input_field"], 0)
-            output_tokens = getattr(usage_obj, self._provider_config["output_field"], 0)
+            input_tokens = getattr(usage_obj, config["input_field"], 0)
+            output_tokens = getattr(usage_obj, config["output_field"], 0)
             return {"input": input_tokens or 0, "output": output_tokens or 0}
         except Exception:
             return {}
 
     def _track_usage(self, token_usage: dict):
         """Track daily API usage and warn when approaching free tier limits."""
-        # Reset counters on new day
         today = time.strftime("%Y-%m-%d")
         if today != self._tracking_date:
             self._daily_requests = 0
@@ -258,7 +405,8 @@ class LLMProcessor:
             f"daily total in={self._daily_input_tokens} out={self._daily_output_tokens}"
         )
 
-        daily_limit = self._provider_config.get("daily_request_limit")
+        config = PROVIDER_USAGE_CONFIG.get(self._provider, {})
+        daily_limit = config.get("daily_request_limit")
         if daily_limit:
             usage_pct = self._daily_requests / daily_limit
             if usage_pct >= 0.95:
@@ -270,27 +418,3 @@ class LLMProcessor:
                 self.logger.warning(
                     f"Approaching free tier limit ({self._daily_requests}/{daily_limit} daily requests)"
                 )
-
-    def _build_prompt(self, text: str, context_before: Optional[str],
-                     context_after: Optional[str]) -> str:
-        """
-        Build prompt for Gemini API with optional context.
-
-        Uses the LLM_SYSTEM_PROMPT constant (defined at top of file) and adds
-        cursor context if available.
-        """
-        # Start with the system prompt template
-        prompt = LLM_SYSTEM_PROMPT + "\n"
-
-        # Add context if available
-        if context_before and context_before.strip():
-            prompt += f"\n[Text before cursor]: ...{context_before[-100:]}\n"
-
-        prompt += f"\n[Dictated text to correct]: {text}\n"
-
-        if context_after and context_after.strip():
-            prompt += f"\n[Text after cursor]: {context_after[:100]}...\n"
-
-        prompt += "\nReturn only the corrected version of the dictated text:"
-
-        return prompt

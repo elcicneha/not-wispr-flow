@@ -47,9 +47,10 @@ from AppKit import (
 # ============================================================================
 from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
                     TRANSCRIPTION_MODE, GROQ_MODEL,
-                    LLM_ENABLED, GEMINI_MODEL, USE_TYPE_MODE)
+                    LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
+                    LLM_PROMPT, LLM_PROMPTS, USE_TYPE_MODE)
 from transcription import TranscriptionManager
-from llm_processor import LLMProcessor
+from llm_processor import LLMProcessor, load_preference, save_preference
 
 # ============================================================================
 # Logging Configuration
@@ -181,7 +182,7 @@ class AppState:
         # Transcription manager (handles Groq API + local MLX Whisper + VAD)
         self.transcription_manager = None
 
-        # LLM processor (optional post-processing with Gemini)
+        # LLM processor (optional post-processing via Gemini/Groq)
         self.llm_processor = None
 
         # Keyboard controller for typing output
@@ -201,8 +202,9 @@ class AppState:
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
         self.use_type_mode = USE_TYPE_MODE  # False = clipboard paste (default), True = character-by-character
 
-        # LLM processing toggle (runtime state, separate from config default)
-        self.llm_enabled = LLM_ENABLED  # Can be toggled at runtime via menu bar
+        # LLM model and prompt selection (runtime state, can be changed via menu bar)
+        self.llm_model = load_preference("llm_model", LLM_MODEL)
+        self.llm_prompt = load_preference("llm_prompt", LLM_PROMPT)
 
         # Transcription state tracking
         self.is_transcribing = False     # True when transcription thread is running
@@ -812,17 +814,17 @@ def post_process(text, context_before, context_after, backend="unknown"):
     llm_time = 0.0
     original_text = text  # Save for logging
 
-    if state.llm_enabled and state.llm_processor and state.llm_processor.enabled and backend == "groq":
+    llm_active = state.llm_model != "disabled" and state.llm_processor and state.llm_processor.enabled
+    if llm_active and backend == "groq":
         text, llm_time = state.llm_processor.process(text, context_before, context_after)
         if llm_time > 0:
-            # Log LLM processing results (always visible, not just DEBUG)
-            logger.info(f"LLM processing: {llm_time:.2f}s")
+            logger.info(f"LLM processing ({state.llm_model}): {llm_time:.2f}s")
             logger.info(f"  Before: {original_text}")
             logger.info(f"  After:  {text}")
-    elif state.llm_enabled and state.llm_processor and state.llm_processor.enabled and backend == "local":
+    elif llm_active and backend == "local":
         logger.debug("LLM processing skipped (local/offline transcription)")
-    elif not state.llm_enabled and backend == "groq":
-        logger.debug("LLM processing disabled by user toggle")
+    elif state.llm_model == "disabled" and backend == "groq":
+        logger.debug("LLM processing disabled by user")
 
     # Step 2: Smart spacing (existing logic)
     # Only add a leading space if:
@@ -1287,14 +1289,14 @@ def acquire_pid_lock():
 # ============================================================================
 
 class MenuDelegate(NSObject):
-    """Handles all menu bar actions: Retype Last, Paste Mode toggle, LLM toggle, Quit."""
+    """Handles all menu bar actions: Retype Last, Paste Mode toggle, LLM Model/Prompt pickers, Quit."""
     shutdown_event = None
     paste_mode_item = None
-    llm_enabled_item = None
+    llm_model_items = None   # dict: model_name -> NSMenuItem
+    llm_prompt_items = None  # dict: prompt_name -> NSMenuItem
 
     def retypeLast_(self, sender):
         """Type last transcription character-by-character in a background thread."""
-        # Thread-safe read of last_transcription
         with state.lock:
             text = state.last_transcription
         if text:
@@ -1314,15 +1316,46 @@ class MenuDelegate(NSObject):
         mode_name = "Type" if state.use_type_mode else "Paste"
         logger.info(f"Text insertion mode: {mode_name}")
 
-    def toggleLLM_(self, sender):
-        """Toggle LLM post-processing on/off."""
-        state.llm_enabled = not state.llm_enabled
-        if self.llm_enabled_item:
-            self.llm_enabled_item.setState_(
-                NSOnState if state.llm_enabled else NSOffState
-            )
-        status = "Enabled" if state.llm_enabled else "Disabled"
-        logger.info(f"LLM post-processing: {status}")
+    def selectLLMModel_(self, sender):
+        """Switch LLM model (radio-button style selection)."""
+        model_name = sender.representedObject()
+        if model_name is None:
+            return
+
+        # Update state and processor
+        state.llm_model = model_name
+        if state.llm_processor:
+            state.llm_processor.switch_model(model_name)
+
+        # Save preference for persistence across restarts
+        save_preference("llm_model", model_name)
+
+        # Update checkmarks (radio-button: only one checked)
+        if self.llm_model_items:
+            for name, item in self.llm_model_items.items():
+                item.setState_(NSOnState if name == model_name else NSOffState)
+
+        display = LLM_MODELS.get(model_name, {}).get("display", model_name)
+        logger.info(f"LLM model switched to: {display} ({model_name})")
+
+    def selectLLMPrompt_(self, sender):
+        """Switch LLM prompt style (radio-button style selection)."""
+        prompt_name = sender.representedObject()
+        if prompt_name is None:
+            return
+
+        state.llm_prompt = prompt_name
+        if state.llm_processor:
+            state.llm_processor.switch_prompt(prompt_name)
+
+        save_preference("llm_prompt", prompt_name)
+
+        if self.llm_prompt_items:
+            for name, item in self.llm_prompt_items.items():
+                item.setState_(NSOnState if name == prompt_name else NSOffState)
+
+        display = LLM_PROMPTS.get(prompt_name, {}).get("display", prompt_name)
+        logger.info(f"LLM prompt switched to: {display} ({prompt_name})")
 
     def quit_(self, sender):
         if self.shutdown_event:
@@ -1337,7 +1370,7 @@ class MenuDelegate(NSObject):
 
 
 def setup_menu_bar(shutdown_event):
-    """Create a menu bar status icon with Retype Last, Paste Mode toggle, LLM toggle, and Quit."""
+    """Create a menu bar status icon with Retype Last, Paste Mode toggle, LLM Model picker, and Quit."""
     app = NSApplication.sharedApplication()
 
     status_bar = NSStatusBar.systemStatusBar()
@@ -1372,14 +1405,57 @@ def setup_menu_bar(shutdown_event):
     delegate.paste_mode_item = paste_mode_item
     menu.addItem_(paste_mode_item)
 
-    # LLM toggle — checked based on LLM_ENABLED config
-    llm_enabled_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "LLM Enhancement", "toggleLLM:", ""
+    # LLM Model submenu — built from LLM_MODELS in config.py
+    llm_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "LLM Model", None, ""
     )
-    llm_enabled_item.setTarget_(delegate)
-    llm_enabled_item.setState_(NSOnState if LLM_ENABLED else NSOffState)
-    delegate.llm_enabled_item = llm_enabled_item
-    menu.addItem_(llm_enabled_item)
+    llm_submenu = NSMenu.alloc().init()
+    llm_model_items = {}
+    current_model = state.llm_model
+
+    # Build submenu grouped by "group" field, with separators between groups
+    last_group = "FIRST"  # sentinel to track group transitions
+    for model_name, model_info in LLM_MODELS.items():
+        group = model_info.get("group")
+        # Add separator between different groups
+        if group != last_group and last_group != "FIRST":
+            llm_submenu.addItem_(NSMenuItem.separatorItem())
+        last_group = group
+
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            model_info["display"], "selectLLMModel:", ""
+        )
+        item.setTarget_(delegate)
+        item.setRepresentedObject_(model_name)
+        item.setState_(NSOnState if model_name == current_model else NSOffState)
+        llm_submenu.addItem_(item)
+        llm_model_items[model_name] = item
+
+    llm_menu_item.setSubmenu_(llm_submenu)
+    delegate.llm_model_items = llm_model_items
+    menu.addItem_(llm_menu_item)
+
+    # LLM Prompt submenu — built from LLM_PROMPTS in config.py
+    prompt_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "LLM Prompt", None, ""
+    )
+    prompt_submenu = NSMenu.alloc().init()
+    llm_prompt_items = {}
+    current_prompt = state.llm_prompt
+
+    for prompt_name, prompt_info in LLM_PROMPTS.items():
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            prompt_info["display"], "selectLLMPrompt:", ""
+        )
+        item.setTarget_(delegate)
+        item.setRepresentedObject_(prompt_name)
+        item.setState_(NSOnState if prompt_name == current_prompt else NSOffState)
+        prompt_submenu.addItem_(item)
+        llm_prompt_items[prompt_name] = item
+
+    prompt_menu_item.setSubmenu_(prompt_submenu)
+    delegate.llm_prompt_items = llm_prompt_items
+    menu.addItem_(prompt_menu_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
 
@@ -1482,11 +1558,11 @@ def main():
     )
     state.transcription_manager.initialize()
 
-    # Initialize LLM processor if enabled
+    # Initialize LLM processor (model may be overridden by saved preference)
     state.llm_processor = LLMProcessor(
-        api_key="",  # Resolved from env/dotfile inside LLMProcessor
-        model=GEMINI_MODEL,
-        enabled=LLM_ENABLED,
+        model=state.llm_model,
+        temperature=LLM_TEMPERATURE,
+        prompt=state.llm_prompt,
         logger=logger,
     )
 
@@ -1507,7 +1583,9 @@ def main():
     logger.info(f"    - Press [{hotkey_name}] + Space together, then speak")
     logger.info(f"    - Press [{hotkey_name}] again to stop and transcribe")
     logger.info("")
-    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, LLM={'ON' if state.llm_enabled else 'OFF'} (toggle via menu), Debug={'ON' if DEBUG else 'OFF'}")
+    llm_display = LLM_MODELS.get(state.llm_model, {}).get("display", state.llm_model)
+    prompt_display = LLM_PROMPTS.get(state.llm_prompt, {}).get("display", state.llm_prompt)
+    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, LLM={llm_display}, Prompt={prompt_display}, Debug={'ON' if DEBUG else 'OFF'}")
     logger.info("=" * 60)
     logger.info("")
 
