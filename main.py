@@ -54,6 +54,7 @@ from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
 from transcription import TranscriptionManager
 from llm_processor import LLMProcessor, load_preference, save_preference
 from media_control import pause_media, resume_media
+from post_processing import post_process
 
 # ============================================================================
 # Logging Configuration
@@ -813,70 +814,6 @@ def get_cursor_context(max_chars=CONTEXT_CHARS):
         return None, None
 
 
-# ============================================================================
-# Text Post-Processing
-# ============================================================================
-
-def post_process(text, context_before, context_after, backend="unknown"):
-    """
-    Apply post-processing transformations to transcribed text.
-
-    Processing pipeline:
-    1. LLM enhancement (if enabled AND online) - grammar, punctuation, corrections
-    2. Smart spacing - add leading/trailing spaces based on context
-
-    Args:
-        text: Raw transcribed text
-        context_before: Text preceding the cursor (may be None or empty string)
-        context_after: Text following the cursor (may be None or empty string)
-        backend: Transcription backend used ("groq" or "local")
-
-    Returns:
-        str: Post-processed text ready for insertion
-    """
-    # Step 1: LLM enhancement (optional, online only)
-    # LLM runs if: enabled (runtime toggle) AND backend is online (groq)
-    # This respects the offline/online mode separation
-    llm_time = 0.0
-    original_text = text  # Save for logging
-
-    llm_active = state.llm_model != "disabled" and state.llm_processor and state.llm_processor.enabled
-    if llm_active and backend == "groq":
-        text, llm_time = state.llm_processor.process(text, context_before, context_after)
-        if llm_time > 0:
-            logger.info(f"LLM processing ({state.llm_model}): {llm_time:.2f}s")
-            logger.info(f"  Before: {original_text}")
-            logger.info(f"  After:  {text}")
-    elif llm_active and backend == "local":
-        logger.debug("LLM processing skipped (local/offline transcription)")
-    elif state.llm_model == "disabled" and backend == "groq":
-        logger.debug("LLM processing disabled by user")
-
-    # Step 2: Smart spacing (existing logic)
-    # Only add a leading space if:
-    # - There's actual non-whitespace text before the cursor (not empty/None/whitespace-only)
-    # - We're not at the start of a new line (after a newline character)
-    # - The text before doesn't end with whitespace
-    # - Our transcribed text doesn't start with whitespace
-    should_add_leading_space = False
-    if (context_before and text and
-        context_before.strip() and  # Has actual non-whitespace content
-        context_before[-1] != '\n' and  # Not at start of new line
-        not context_before[-1].isspace() and  # Not after any whitespace
-        not text[0].isspace()):  # Text doesn't start with space
-        should_add_leading_space = True
-        text = " " + text
-
-    # Only add trailing space if context after doesn't start with a space
-    should_add_trailing_space = True
-    if context_after and context_after[0].isspace():
-        should_add_trailing_space = False
-
-    if should_add_trailing_space and not text.endswith(" "):
-        text = text + " "
-
-    return text
-
 
 def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, recording_start_time=None, recording_stop_time=None):
     """
@@ -952,7 +889,8 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         logger.info(f"Transcription ({backend}): {text}")
 
         # Post-process transcribed text (includes LLM enhancement if enabled + online)
-        text = post_process(text, context_before, context_after, backend=backend)
+        text = post_process(text, context_before, context_after, backend=backend,
+                            llm_model=state.llm_model, llm_processor=state.llm_processor)
 
         # Insert the text at cursor position
         insert_text(text)
