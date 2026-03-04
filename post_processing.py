@@ -46,26 +46,30 @@ def post_process(text, context_before, context_after, backend="unknown", llm_mod
         logger.debug("LLM processing disabled by user")
 
     # Step 2: Smart spacing
-    # Only add a leading space if:
-    # - There's actual non-whitespace text before the cursor (not empty/None/whitespace-only)
-    # - We're not at the start of a new line (after a newline character)
-    # - The text before doesn't end with whitespace
-    # - Our transcribed text doesn't start with whitespace
+    # Only add a leading space if we KNOW there's actual text before the cursor.
+    # context_before=None → AX couldn't read context → don't add space (avoid extra spaces)
+    # context_before="" → cursor is at field start → don't add space
+    # context_before="actual text" → add space only if it doesn't end with whitespace/newline
     should_add_leading_space = False
-    if (context_before and text and
-        context_before.strip() and  # Has actual non-whitespace content
-        context_before[-1] != '\n' and  # Not at start of new line
-        not context_before[-1].isspace() and  # Not after any whitespace
-        not text[0].isspace()):  # Text doesn't start with space
-        should_add_leading_space = True
+    if text and not text[0].isspace():
+        if (context_before and
+              context_before.strip() and  # Has actual non-whitespace content
+              context_before[-1] != '\n' and  # Not at start of new line
+              not context_before[-1].isspace()):  # Not after any whitespace
+            should_add_leading_space = True
+
+    if should_add_leading_space:
         text = " " + text
 
-    # Only add trailing space if context after doesn't start with a space
+    # Add trailing space based on context_after
+    # If context_after is None or empty → add trailing space
+    # If context_after exists → only add space if it doesn't start with whitespace
     should_add_trailing_space = True
-    if context_after and context_after[0].isspace():
-        should_add_trailing_space = False
+    if text and not text.endswith(" "):
+        if context_after and context_after[0].isspace():
+            should_add_trailing_space = False
 
-    if should_add_trailing_space and not text.endswith(" "):
-        text = text + " "
+        if should_add_trailing_space:
+            text = text + " "
 
     return text
