@@ -28,6 +28,10 @@ import subprocess
 import json
 from collections import deque
 import objc
+from Quartz import (
+    CGEventCreateKeyboardEvent, CGEventKeyboardSetUnicodeString,
+    CGEventPost, kCGHIDEventTap,
+)
 from ApplicationServices import (
     AXUIElementCreateSystemWide,
     AXUIElementCopyAttributeValue,
@@ -39,7 +43,7 @@ from ApplicationServices import (
 from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSOnState, NSOffState,
-    NSImage, NSPasteboard, NSPasteboardItem,
+    NSImage, NSPasteboard, NSData,
     NSEventModifierFlagControl, NSEventModifierFlagCommand
 )
 
@@ -668,68 +672,72 @@ def _transcription_wrapper(audio_buffer, **kwargs):
 # Transcription and Text Output
 # ============================================================================
 
-class _PasteboardOwner(NSObject):
-    """Lazy pasteboard owner using declareTypes:owner: (classic macOS API).
-
-    When the target app reads from the clipboard during Cmd+V, macOS calls
-    pasteboard:provideDataForType: on the owner. We provide the text and
-    signal a threading.Event so the caller knows when it's safe to restore
-    the previous clipboard contents — no race condition, no fixed delay.
+def _type_chunked(text, chunk_size=16, delay=0.008):
     """
+    Type text by sending chunks of characters via CGEvent keyboard events.
 
-    def initWithText_event_(self, text, event):
-        self = objc.super(_PasteboardOwner, self).init()
-        if self is None:
-            return None
-        self._text = text
-        self._consumed = event
-        return self
+    Uses CGEventKeyboardSetUnicodeString to send multiple characters per
+    keyboard event — the same mechanism macOS input methods (CJK) use to
+    commit entire words. Much faster than character-by-character typing
+    while avoiding auto-period and character drop issues.
 
-    def pasteboard_provideDataForType_(self, pb, ptype):
-        """Called by macOS when the target app actually reads the clipboard."""
-        try:
-            pb.setString_forType_(self._text, ptype)
-        finally:
-            self._consumed.set()
+    500 chars → ~32 events × 8ms = ~256ms (vs 4s char-by-char).
+
+    Args:
+        text: The text to type
+        chunk_size: Characters per keyboard event (default 16, max ~20)
+        delay: Seconds between events (default 8ms)
+    """
+    for i in range(0, len(text), chunk_size):
+        chunk = text[i:i + chunk_size]
+        # Create key down/up events (virtual keycode 0 is arbitrary —
+        # CGEventKeyboardSetUnicodeString overrides the actual character output)
+        event_down = CGEventCreateKeyboardEvent(None, 0, True)
+        event_up = CGEventCreateKeyboardEvent(None, 0, False)
+        CGEventKeyboardSetUnicodeString(event_down, len(chunk), chunk)
+        CGEventKeyboardSetUnicodeString(event_up, len(chunk), chunk)
+        CGEventPost(kCGHIDEventTap, event_down)
+        CGEventPost(kCGHIDEventTap, event_up)
+        time.sleep(delay)
 
 
 def insert_text(text):
     """
     Insert transcribed text at cursor position.
-    Uses clipboard paste by default (instant, unicode-safe) with a lazy owner
-    to detect when the target app has consumed the paste.
+    Uses clipboard paste by default (instant, unicode-safe) with concealed
+    clipboard write to avoid polluting clipboard history.
     Falls back to character-by-character typing when use_type_mode is enabled.
     """
     with state.lock:
         state.last_transcription = text
 
     if state.use_type_mode:
-        state.keyboard_controller.type(text)
+        _type_chunked(text)
         return
 
     pb = NSPasteboard.generalPasteboard()
     old_clipboard = pb.stringForType_('public.utf8-plain-text')
 
-    # Use declareTypes:owner: to register a lazy owner. The owner's
-    # pasteboard:provideDataForType: fires only when the target app
-    # actually reads the clipboard during Cmd+V, so we know exactly
-    # when it's safe to restore.
-    consumed = threading.Event()
-    owner = _PasteboardOwner.alloc().initWithText_event_(text, consumed)
-    pb.declareTypes_owner_(['public.utf8-plain-text'], owner)
+    # Eagerly place transcription text on clipboard
+    pb.clearContents()
+    if not pb.setString_forType_(text, 'public.utf8-plain-text'):
+        logger.error(f"Failed to set clipboard content ({len(text)} chars)")
+        return
 
-    # Simulate Cmd+V
-    time.sleep(0.01)
+    # Mark as concealed so clipboard managers (Alfred, Paste, Maccy) ignore it
+    pb.setData_forType_(NSData.data(), 'org.nspasteboard.ConcealedType')
+
+    # Small delay for clipboard to settle, then simulate Cmd+V
+    time.sleep(0.02)
     state.keyboard_controller.press(Key.cmd)
     state.keyboard_controller.press('v')
     state.keyboard_controller.release('v')
     state.keyboard_controller.release(Key.cmd)
 
-    # Wait until the target app has actually read our text (owner callback fires).
-    # 2s timeout is a safety net — normal paste completes in <50ms.
-    consumed.wait(timeout=2.0)
+    # Wait for paste to complete before restoring clipboard
+    time.sleep(0.2)
 
-    # Now safe to restore — the target app has already consumed our text
+    # Restore previous clipboard contents
     pb.clearContents()
     if old_clipboard is not None:
         pb.setString_forType_(old_clipboard, 'public.utf8-plain-text')
@@ -1265,7 +1273,7 @@ class MenuDelegate(NSObject):
             text = state.last_transcription
         if text:
             threading.Thread(
-                target=state.keyboard_controller.type,
+                target=_type_chunked,
                 args=(text,),
                 daemon=True
             ).start()
@@ -1366,7 +1374,7 @@ def setup_menu_bar(shutdown_event):
         "Paste Mode", "togglePasteMode:", ""
     )
     paste_mode_item.setTarget_(delegate)
-    paste_mode_item.setState_(NSOnState)
+    paste_mode_item.setState_(NSOffState if state.use_type_mode else NSOnState)
     delegate.paste_mode_item = paste_mode_item
     menu.addItem_(paste_mode_item)
 
