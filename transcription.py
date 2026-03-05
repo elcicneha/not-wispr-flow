@@ -282,7 +282,7 @@ class TranscriptionManager:
         elif self.mode == "auto":
             if self._groq_api_key:
                 self.logger.info(f"Auto mode: Groq API key found, will use Groq with local fallback")
-                self._load_local_model()
+                # Don't load model yet - will load on-demand if needed
                 self._start_connectivity_monitor()
             else:
                 self.logger.info("Auto mode: No Groq API key configured, using local transcription only")
