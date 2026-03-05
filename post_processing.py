@@ -5,7 +5,7 @@ Handles LLM enhancement and smart spacing before text insertion.
 
 import logging
 
-logger = logging.getLogger("NotWisprFlow")
+logger = logging.getLogger("notwisprflow")
 
 
 def post_process(text, context_before, context_after, backend="unknown", llm_model="disabled", llm_processor=None):
@@ -37,9 +37,7 @@ def post_process(text, context_before, context_after, backend="unknown", llm_mod
     if llm_active and backend == "groq":
         text, llm_time = llm_processor.process(text, context_before, context_after)
         if llm_time > 0:
-            logger.info(f"LLM processing ({llm_model}): {llm_time:.2f}s")
-            logger.info(f"  Before: {original_text}")
-            logger.info(f"  After:  {text}")
+            logger.info(f"LLM enhanced:  {text} ({llm_time:.2f}s)")
     elif llm_active and backend == "local":
         logger.debug("LLM processing skipped (local/offline transcription)")
     elif llm_model == "disabled" and backend == "groq":

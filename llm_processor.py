@@ -223,7 +223,7 @@ class LLMProcessor:
             try:
                 from google import genai
                 self._gemini_client = genai.Client(api_key=self._gemini_api_key)
-                self.logger.info(f"Gemini LLM client initialized: {self._model}")
+                self.logger.debug(f"Gemini LLM client initialized: {self._model}")
             except Exception as e:
                 import traceback
                 self.logger.error(f"Failed to initialize Gemini client: {e}")
@@ -237,7 +237,7 @@ class LLMProcessor:
             try:
                 from groq import Groq
                 self._groq_client = Groq(api_key=self._groq_api_key, timeout=10.0)
-                self.logger.info(f"Groq LLM client initialized: {self._model}")
+                self.logger.debug(f"Groq LLM client initialized: {self._model}")
             except Exception as e:
                 import traceback
                 self.logger.error(f"Failed to initialize Groq client: {e}")

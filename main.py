@@ -894,7 +894,7 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
             return
 
         # Log original transcription (before post-processing)
-        logger.info(f"Transcription ({backend}): {text}")
+        logger.info(f"Transcription: {text}")
 
         # Post-process transcribed text (includes LLM enhancement if enabled + online)
         text = post_process(text, context_before, context_after, backend=backend,
@@ -906,7 +906,7 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
 
         # Log backend + timing summary (easy to grep/compare API vs local)
         total_sec = time.time() - recording_stop_time if recording_stop_time else processing_sec
-        logger.info(f"[{backend.upper()}] {len(text)} chars in {total_sec:.2f}s total ({processing_sec:.2f}s transcription)")
+        logger.info(f"Backend: {backend} | {len(text)} chars | {total_sec:.2f}s total ({processing_sec:.2f}s transcription)")
 
         # Log recording analytics
         rec_duration = (recording_stop_time - recording_start_time) if (recording_start_time and recording_stop_time) else duration
@@ -1329,6 +1329,19 @@ class MenuDelegate(NSObject):
         display = LLM_PROMPTS.get(prompt_name, {}).get("display", prompt_name)
         logger.info(f"LLM prompt switched to: {display} ({prompt_name})")
 
+    def openLogs_(self, sender):
+        """Open the logs directory in Finder."""
+        log_dir = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'
+        log_file = log_dir / 'notwisprflow.log'
+
+        # Open log file if it exists, otherwise open the directory
+        if log_file.exists():
+            subprocess.run(['open', str(log_file)], check=False)
+        elif log_dir.exists():
+            subprocess.run(['open', str(log_dir)], check=False)
+        else:
+            logger.warning("Log file not found")
+
     def quit_(self, sender):
         if self.shutdown_event:
             self.shutdown_event.set()
@@ -1429,6 +1442,15 @@ def setup_menu_bar(shutdown_event):
     prompt_menu_item.setSubmenu_(prompt_submenu)
     delegate.llm_prompt_items = llm_prompt_items
     menu.addItem_(prompt_menu_item)
+
+    menu.addItem_(NSMenuItem.separatorItem())
+
+    # Open Logs
+    logs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Open Logs", "openLogs:", ""
+    )
+    logs_item.setTarget_(delegate)
+    menu.addItem_(logs_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
 
