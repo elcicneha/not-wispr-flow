@@ -75,8 +75,7 @@ OPTIONS = {
     # Explicitly include these packages and their dependencies
     'packages': [
         'numpy',
-        'sounddevice',
-        '_sounddevice_data',
+        'soundcard',
         'pynput',
         'av',
         'huggingface_hub',

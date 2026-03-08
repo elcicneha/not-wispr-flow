@@ -13,7 +13,7 @@ import sys
 import time
 import threading
 import numpy as np
-import sounddevice as sd
+import soundcard as sc
 from pynput import keyboard
 from pynput.keyboard import Key, Controller
 import logging
@@ -138,7 +138,6 @@ logger = None
 
 SAMPLE_RATE = 16000     # Whisper's native sample rate (Hz)
 CHANNELS = 1            # Mono audio
-DTYPE = 'int16'         # Audio data type for sounddevice
 MIN_RECORDING_DURATION = 0.2  # Minimum recording length in seconds
 DEBOUNCE_MS = 100       # Debounce time for rapid key presses (milliseconds)
 FLUSH_BUFFER_THRESHOLD_MB = 5  # Flush buffer to disk when it exceeds this (crash recovery)
@@ -202,8 +201,8 @@ class AppState:
         # Keyboard controller for typing output
         self.keyboard_controller = None
 
-        # Audio stream instance
-        self.audio_stream = None
+        # Recording thread (SoundCard recording loop)
+        self._recording_thread = None
 
         # Thread safety lock
         self.lock = threading.Lock()
@@ -236,11 +235,6 @@ class AppState:
 
         # Media pause/resume during recording
         self.media_was_paused = False  # True if we paused media (so we know to resume)
-
-        # Audio stream cleanup tracking — stores the daemon thread and stream object
-        # from _cleanup_stream() so start_recording() can wait and resetMicrophone_ can abort
-        self._pending_cleanup_thread = None
-        self._pending_cleanup_stream = None  # The actual stream being cleaned up
 
 
 # Global state instance
@@ -409,74 +403,56 @@ def update_menu_bar_icon(state_name):
 # Audio Recording Functions
 # ============================================================================
 
-def audio_callback(indata, frames, time_info, status):
+def _recording_loop():
+    """Background thread: records audio via SoundCard (CoreAudio) and appends to buffer.
+
+    Uses SoundCard's context manager for clean resource management.
+    When state.is_recording becomes False, the loop exits, the context
+    manager closes CoreAudio cleanly — no hanging, no timeouts needed.
+
+    Audio data is float32 in [-1, 1] range (SoundCard's native format).
     """
-    Callback function for sounddevice audio stream.
-    Called automatically for each audio chunk.
-
-    Lock-free: deque.append() is atomic under CPython's GIL,
-    so no lock is needed and no audio frames are ever dropped.
-
-    CRITICAL: No blocking operations allowed in this callback.
-    This callback runs in a real-time audio thread and must complete
-    in microseconds. Any blocking operations (I/O, logging, locks) will
-    cause stream.stop() to hang indefinitely, leaving the microphone active.
-
-    Status errors (overflow/underflow) are ignored here as they are
-    informational only and logging them would block the callback.
-
-    Args:
-        indata: Input audio data (numpy array)
-        frames: Number of frames
-        time_info: Time information
-        status: Stream status flags (ignored - no logging in callback)
-    """
-    # Note: status parameter intentionally not checked/logged
-    # Logging here causes blocking I/O that hangs stream cleanup
-
-    if state.is_recording:
-        state.audio_buffer.append(indata.copy())
+    try:
+        mic = sc.default_microphone()
+        with mic.recorder(samplerate=SAMPLE_RATE, channels=[0]) as rec:
+            while state.is_recording:
+                # Record in 100ms blocks so we check is_recording flag frequently
+                data = rec.record(numframes=SAMPLE_RATE // 10)
+                # deque.append() is GIL-atomic — no lock needed
+                if state.is_recording:
+                    state.audio_buffer.append(data)
+    except Exception as e:
+        if logger:
+            logger.error(f"Recording thread error: {e}")
+        # Reset state so the user isn't stuck
+        state.is_recording = False
+        update_menu_bar_icon('idle')
 
 
 def start_recording():
     """
-    Start audio recording by creating and starting an audio stream.
+    Start audio recording via SoundCard in a background thread.
     Must be called with state.lock held.
 
-    Idempotent: safely cleans up any existing stream before starting.
-    On failure: guarantees state is clean (is_recording=False, stream=None).
+    On failure: guarantees state is clean (is_recording=False).
     Raises on failure so the caller can reset mode.
     """
-    # Clean up any existing stream first (idempotent)
-    _cleanup_stream()
-
-    # Wait for any pending cleanup thread from a previous timeout.
-    # Prevents creating a new stream while the old PortAudio stream
-    # is still being torn down by a zombie cleanup thread.
-    pending = state._pending_cleanup_thread
-    if pending is not None and pending.is_alive():
-        logger.warning("Waiting for previous stream cleanup to finish...")
-        pending.join(timeout=3.0)
-        if pending.is_alive():
-            logger.error("Previous stream cleanup still running after 3s — proceeding anyway")
-    state._pending_cleanup_thread = None
-    state._pending_cleanup_stream = None
+    # Wait for any previous recording thread to finish
+    if state._recording_thread is not None and state._recording_thread.is_alive():
+        logger.warning("Waiting for previous recording thread to finish...")
+        state._recording_thread.join(timeout=2.0)
+        if state._recording_thread.is_alive():
+            logger.warning("Previous recording thread still alive after 2s — proceeding anyway")
 
     state.audio_buffer.clear()
     state.overflow_files = []
     state.overflow_file_counter = 0
     state.recording_start_time = time.time()
-    state.is_recording = False
 
     try:
-        state.audio_stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype=DTYPE,
-            callback=audio_callback
-        )
-        state.audio_stream.start()
         state.is_recording = True
+        state._recording_thread = threading.Thread(target=_recording_loop, daemon=True)
+        state._recording_thread.start()
         update_menu_bar_icon('recording')
         logger.debug(f"Recording started - Mode: {state.mode}")
 
@@ -489,52 +465,9 @@ def start_recording():
             threading.Thread(target=_pause_media_async, daemon=True).start()
     except Exception:
         # Guarantee clean state on failure
-        _cleanup_stream()
         state.is_recording = False
         update_menu_bar_icon('idle')
         raise
-
-
-def _cleanup_stream():
-    """Safely close the audio stream with timeout. Idempotent — safe to call anytime.
-
-    Uses a background thread with 2s timeout to prevent stream.stop()/close()
-    from hanging and deadlocking the main lock (which blocks all key events).
-    """
-    if state.audio_stream is not None:
-        stream = state.audio_stream
-        state.audio_stream = None  # Clear reference immediately so state is clean
-
-        def _close():
-            try:
-                if logger:
-                    logger.debug("_cleanup_stream: Calling stream.abort()...")
-                abort_start = time.time()
-                stream.abort()  # Immediate termination, don't wait for pending buffers
-                abort_duration = time.time() - abort_start
-                if logger:
-                    logger.debug(f"_cleanup_stream: stream.abort() took {abort_duration:.3f}s")
-
-                if logger:
-                    logger.debug("_cleanup_stream: Calling stream.close()...")
-                close_start = time.time()
-                stream.close()
-                close_duration = time.time() - close_start
-                if logger:
-                    logger.debug(f"_cleanup_stream: stream.close() took {close_duration:.3f}s")
-            except Exception as e:
-                if logger:
-                    logger.error(f"_cleanup_stream: Exception during cleanup: {e}")
-
-        t = threading.Thread(target=_close, daemon=True)
-        t.start()
-        t.join(timeout=2.0)
-        if t.is_alive():
-            if logger:
-                logger.warning("Audio stream cleanup timed out (2s) — continuing anyway")
-        # Store thread + stream ref so start_recording() can wait and resetMicrophone_ can abort
-        state._pending_cleanup_thread = t
-        state._pending_cleanup_stream = stream
 
 
 def cleanup_stale_overflow_files():
@@ -633,8 +566,7 @@ def stop_recording():
     state.overflow_files = []
     state.overflow_file_counter = 0
     state.recording_start_time = None
-    state.is_recording = False
-    _cleanup_stream()
+    state.is_recording = False  # Recording thread will exit its loop and clean up
 
     if not buffer_snapshot and not overflow_snapshot:
         logger.debug("Recording stopped - empty buffer, skipping transcription")
@@ -888,9 +820,8 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         # Combine all audio chunks into single array
         audio_data = np.concatenate(all_chunks, axis=0)
 
-        # Convert from int16 to float32 and normalize to [-1.0, 1.0]
-        audio_float = audio_data.astype(np.float32) / 32768.0
-        audio_float = audio_float.flatten()
+        # SoundCard outputs float32 in [-1.0, 1.0] range — just flatten
+        audio_float = audio_data.flatten().astype(np.float32)
 
         # Check minimum duration
         duration = len(audio_float) / SAMPLE_RATE
@@ -1013,7 +944,7 @@ def on_press(key):
                         # Recording never actually started (or buffer empty).
                         # Safe to reset — fall through to start a new recording.
                         logger.warning(f"Stuck recovery: mode={state.mode}, not recording, no data. Resetting to idle.")
-                        _cleanup_stream()
+                        state.is_recording = False
                         state.mode = None
                         update_menu_bar_icon('idle')
                         # Fall through to state.mode is None → start new recording
@@ -1082,7 +1013,6 @@ def on_press(key):
                 # Ctrl+Cmd+C → Retype last transcription
                 # Cancel accidental recording if hotkey was pressed before Cmd
                 if state.is_recording:
-                    _cleanup_stream()
                     state.is_recording = False
                     state.audio_buffer.clear()
                     state.overflow_files = []
@@ -1123,7 +1053,7 @@ def on_release(key):
                     logger.info("Hold mode: Recording stopped")
 
                 elif state.mode == "hold" and not state.is_recording:
-                    # Stuck: hold mode but not recording (stream died).
+                    # Stuck: hold mode but not recording (recording thread died).
                     # Salvage any data, then reset.
                     has_data = bool(state.audio_buffer or state.overflow_files)
                     if has_data:
@@ -1134,7 +1064,7 @@ def on_release(key):
                             state.mode = None
                     else:
                         logger.warning("Stuck recovery (release): mode=hold, not recording, no data. Resetting.")
-                        _cleanup_stream()
+                        state.is_recording = False
                         state.mode = None
                         update_menu_bar_icon('idle')
 
@@ -1162,28 +1092,10 @@ def test_microphone_access():
     try:
         logger.info("Testing microphone access...")
 
-        # Try to open a test stream
-        test_stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype=DTYPE
-        )
-        test_stream.start()
-        time.sleep(0.1)
-
-        # Use timeout to prevent hanging on stop/close (PortAudio can hang)
-        def _close_test_stream():
-            try:
-                test_stream.stop()
-                test_stream.close()
-            except Exception:
-                pass
-
-        t = threading.Thread(target=_close_test_stream, daemon=True)
-        t.start()
-        t.join(timeout=3.0)
-        if t.is_alive():
-            logger.warning("Microphone test stream cleanup timed out (3s) — continuing anyway")
+        # Try to record a brief test via SoundCard (CoreAudio)
+        mic = sc.default_microphone()
+        with mic.recorder(samplerate=SAMPLE_RATE, channels=[0]) as rec:
+            rec.record(numframes=SAMPLE_RATE // 10)  # 100ms test
 
         logger.info("Microphone access OK")
         return True
@@ -1751,33 +1663,13 @@ class MenuDelegate(NSObject):
         """Force-reset audio state. Use when microphone gets stuck."""
         logger.info("Reset Microphone: force-resetting all audio state...")
         with state.lock:
-            state.is_recording = False
+            state.is_recording = False  # Recording thread will exit its loop
             state.mode = None
             state.audio_buffer.clear()
-            # Collect both the current stream AND any zombie stream from a timed-out cleanup
-            streams_to_close = []
-            if state.audio_stream is not None:
-                streams_to_close.append(state.audio_stream)
-            if state._pending_cleanup_stream is not None:
-                streams_to_close.append(state._pending_cleanup_stream)
-            state.audio_stream = None
-            state._pending_cleanup_thread = None
-            state._pending_cleanup_stream = None
-
-        # Force-close all collected streams outside the lock
-        if streams_to_close:
-            def _force_close():
-                for s in streams_to_close:
-                    try:
-                        logger.debug(f"Reset Microphone: aborting stream {id(s)}")
-                        s.abort()
-                        s.close()
-                    except Exception as e:
-                        logger.warning(f"Reset Microphone: error closing stream: {e}")
-            t = threading.Thread(target=_force_close, daemon=True)
-            t.start()
-            t.join(timeout=3.0)
-
+            state.overflow_files = []
+            state.overflow_file_counter = 0
+        # Recording thread exits naturally when is_recording becomes False,
+        # and its context manager cleanly releases CoreAudio resources.
         update_menu_bar_icon('idle')
         logger.info("Reset Microphone: done. Ready to record.")
 
@@ -1943,20 +1835,15 @@ def health_monitor(listener, shutdown_event):
             NSApplication.sharedApplication().terminate_(None)
             return
 
-        # Check audio stream health during recording.
-        # If the stream died, salvage any captured audio and reset to idle.
-        # This catches stream crashes within ~5s so the user isn't left
+        # Check recording thread health during recording.
+        # If the thread died, salvage any captured audio and reset to idle.
+        # This catches recording crashes within ~5s so the user isn't left
         # talking into nothing for minutes.
         with state.lock:
-            if state.is_recording and state.audio_stream is not None:
-                try:
-                    stream_alive = state.audio_stream.active
-                except Exception:
-                    stream_alive = False
-
-                if not stream_alive:
+            if state.is_recording and state._recording_thread is not None:
+                if not state._recording_thread.is_alive():
                     has_data = bool(state.audio_buffer or state.overflow_files)
-                    logger.warning(f"Health monitor: Audio stream died during recording (has data: {has_data}). Auto-recovering.")
+                    logger.warning(f"Health monitor: Recording thread died (has data: {has_data}). Auto-recovering.")
                     try:
                         stop_recording()  # Will transcribe partial data if any
                     finally:
@@ -2072,8 +1959,7 @@ def main():
         with state.lock:
             if state.is_recording:
                 stop_recording()
-            else:
-                _cleanup_stream()
+            state.is_recording = False  # Ensure recording thread exits
             state.mode = None
             # Clean up any remaining overflow files
             for fpath in state.overflow_files:
