@@ -49,7 +49,7 @@ from AppKit import (
     NSBezelStyleRounded, NSFont, NSColor,
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSBackingStoreBuffered, NSModalResponseOK, NSModalResponseCancel,
-    NSTextAlignmentCenter, NSLineBreakByWordWrapping,
+    NSLineBreakByWordWrapping,
 )
 from Foundation import NSMakeRect
 
@@ -1298,6 +1298,177 @@ def acquire_pid_lock():
 # Menu Bar Icon
 # ============================================================================
 
+def _make_text_view(width, height, editable=True, font_size=13):
+    """Create an NSScrollView + NSTextView pair for text editing."""
+    scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, width, height))
+    scroll.setHasVerticalScroller_(True)
+    scroll.setBorderType_(2)  # NSBezelBorder
+    inner_w = width - 4
+    tv = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, inner_w, height))
+    tv.setMinSize_(NSMakeRect(0, 0, inner_w, height).size)
+    tv.setMaxSize_(NSMakeRect(0, 0, inner_w, 10000).size)
+    tv.setVerticallyResizable_(True)
+    tv.setHorizontallyResizable_(False)
+    tv.textContainer().setWidthTracksTextView_(True)
+    tv.setFont_(NSFont.systemFontOfSize_(font_size))
+    tv.setAllowsUndo_(True)
+    tv.setEditable_(editable)
+    tv.setSelectable_(True)
+    if not editable:
+        tv.setBackgroundColor_(NSColor.controlBackgroundColor())
+        tv.setTextColor_(NSColor.secondaryLabelColor())
+    scroll.setDocumentView_(tv)
+    return scroll, tv
+
+
+class _PromptPanelController(NSObject):
+    """Controller for the Personal Prompt editing panel with collapsible system prompt sections."""
+    _panel = None
+    _subtitle = None
+    _personal_scroll = None
+    _personal_tv = None
+    _sections = None
+    _cancel_btn = None
+    _save_btn = None
+
+    def toggleSection_(self, sender):
+        """Toggle expand/collapse of a system prompt section."""
+        idx = sender.tag()
+        sec = self._sections[idx]
+        sec["expanded"] = not sec["expanded"]
+        arrow = "\u25BC" if sec["expanded"] else "\u25B6"
+        sender.setTitle_(f"{arrow} {sec['label']}")
+        self._relayout()
+
+    def editSection_(self, sender):
+        """Toggle between Edit and Save for a system prompt section."""
+        idx = sender.tag()
+        sec = self._sections[idx]
+
+        if not sec["editing"]:
+            # Start editing
+            sec["editing"] = True
+            sec["tv"].setEditable_(True)
+            sec["tv"].setBackgroundColor_(NSColor.textBackgroundColor())
+            sec["tv"].setTextColor_(NSColor.labelColor())
+            self._panel.makeFirstResponder_(sec["tv"])
+            sender.setTitle_("Save")
+            sec["reset_btn"].setHidden_(False)
+        else:
+            # Save: persist override immediately
+            new_text = sec["tv"].string()
+            has_context = sec["variant"] == "with_context"
+            if state.llm_processor:
+                preset = state.llm_processor.get_preset_system_prompt(has_context)
+                if new_text.strip() == preset.strip():
+                    state.llm_processor.reset_custom_system_prompt(sec["variant"])
+                else:
+                    state.llm_processor.set_custom_system_prompt(sec["variant"], new_text)
+            # Return to read-only
+            sec["tv"].setEditable_(False)
+            sec["tv"].setBackgroundColor_(NSColor.controlBackgroundColor())
+            sec["tv"].setTextColor_(NSColor.secondaryLabelColor())
+            sec["editing"] = False
+            sender.setTitle_("Edit")
+            # Update info label
+            has_custom = state.llm_processor.has_custom_system_prompt(sec["variant"]) if state.llm_processor else False
+            if has_custom:
+                sec["info"].setStringValue_("Custom override")
+            else:
+                preset_name = state.llm_processor._prompt_config.get("display", "") if state.llm_processor else ""
+                sec["info"].setStringValue_(f"From preset: {preset_name}")
+            sec["reset_btn"].setHidden_(not has_custom)
+
+    def resetSection_(self, sender):
+        """Reset a system prompt section to the preset default and persist immediately."""
+        idx = sender.tag()
+        sec = self._sections[idx]
+        has_context = sec["variant"] == "with_context"
+        preset_text = ""
+        preset_name = ""
+        if state.llm_processor:
+            state.llm_processor.reset_custom_system_prompt(sec["variant"])
+            preset_text = state.llm_processor.get_preset_system_prompt(has_context)
+            preset_name = state.llm_processor._prompt_config.get("display", "")
+        sec["tv"].setString_(preset_text)
+        sec["tv"].setEditable_(False)
+        sec["tv"].setBackgroundColor_(NSColor.controlBackgroundColor())
+        sec["tv"].setTextColor_(NSColor.secondaryLabelColor())
+        sec["editing"] = False
+        sec["edit_btn"].setTitle_("Edit")
+        sec["reset_btn"].setHidden_(True)
+        sec["info"].setStringValue_(f"From preset: {preset_name}")
+
+    def _relayout(self, animate=True):
+        """Reposition all views and resize panel based on current section expand states."""
+        W = 420
+        PAD = 20
+        IW = W - 2 * PAD
+
+        # Compute layout top-down (top = distance from top of content area)
+        top = 8   # top padding
+        sub_top = top
+        top += 36  # subtitle (32) + gap (4)
+        pp_top = top
+        top += 128  # personal prompt (120) + gap (8)
+
+        sec_layout = []
+        for sec in self._sections:
+            layout = {"disc_top": top}
+            top += 28  # disclosure (24) + gap (4)
+            if sec["expanded"]:
+                layout["info_top"] = top
+                top += 22  # info (18) + gap (4)
+                layout["scroll_top"] = top
+                top += 144  # scroll (140) + gap (4)
+                layout["btn_top"] = top
+                top += 30  # buttons (24) + gap (6)
+            sec_layout.append(layout)
+
+        top += 8  # gap before cancel/save
+        btn_top = top
+        top += 42  # buttons (30) + bottom padding (12)
+        total_h = top
+
+        # Convert top-offset to macOS Y (Y=0 at bottom)
+        def mac_y(t, h):
+            return total_h - t - h
+
+        self._subtitle.setFrame_(NSMakeRect(PAD, mac_y(sub_top, 32), IW, 32))
+        self._personal_scroll.setFrame_(NSMakeRect(PAD, mac_y(pp_top, 120), IW, 120))
+
+        for sec, lay in zip(self._sections, sec_layout):
+            sec["disclosure"].setFrame_(NSMakeRect(PAD, mac_y(lay["disc_top"], 24), IW, 24))
+            if sec["expanded"]:
+                sec["info"].setFrame_(NSMakeRect(PAD, mac_y(lay["info_top"], 18), IW, 18))
+                sec["scroll"].setFrame_(NSMakeRect(PAD, mac_y(lay["scroll_top"], 140), IW, 140))
+                sec["edit_btn"].setFrame_(NSMakeRect(PAD, mac_y(lay["btn_top"], 24), 60, 24))
+                sec["reset_btn"].setFrame_(NSMakeRect(PAD + 70, mac_y(lay["btn_top"], 24), 120, 24))
+
+            for key in ["info", "scroll", "edit_btn"]:
+                sec[key].setHidden_(not sec["expanded"])
+            if sec["expanded"]:
+                has_custom = state.llm_processor.has_custom_system_prompt(sec["variant"]) if state.llm_processor else False
+                sec["reset_btn"].setHidden_(not (has_custom or sec["editing"]))
+            else:
+                sec["reset_btn"].setHidden_(True)
+
+        self._cancel_btn.setFrame_(NSMakeRect(W - 190, mac_y(btn_top, 30), 80, 30))
+        self._save_btn.setFrame_(NSMakeRect(W - 100, mac_y(btn_top, 30), 80, 30))
+
+        # Resize panel keeping top edge stable
+        old_frame = self._panel.frame()
+        content_rect = NSMakeRect(0, 0, W, total_h)
+        new_frame = self._panel.frameRectForContentRect_(content_rect)
+        top_y = old_frame.origin.y + old_frame.size.height
+        final = NSMakeRect(old_frame.origin.x, top_y - new_frame.size.height,
+                           new_frame.size.width, new_frame.size.height)
+        if animate:
+            self._panel.setFrame_display_animate_(final, True, True)
+        else:
+            self._panel.setFrame_display_(final, True)
+
+
 class MenuDelegate(NSObject):
     """Handles all menu bar actions: Retype Last, Paste Mode toggle, LLM Model/Prompt pickers, Personal Prompt, Quit."""
     shutdown_event = None
@@ -1369,91 +1540,180 @@ class MenuDelegate(NSObject):
         logger.info(f"LLM prompt switched to: {display} ({prompt_name})")
 
     def editPersonalPrompt_(self, sender):
-        """Open a clean panel to edit the personal prompt (additional LLM instructions)."""
-        W, H = 420, 280
+        """Open panel to edit personal prompt and system prompt overrides."""
+        W = 420
+        PAD = 20
+        IW = W - 2 * PAD
+
         panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, W, H),
+            NSMakeRect(0, 0, W, 100),  # dummy height, _relayout sets correct size
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
             NSBackingStoreBuffered,
             False,
         )
         panel.setTitle_("Personal Prompt")
-        panel.center()
-
         content = panel.contentView()
 
-        # Subtitle label
-        label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, H - 52, W - 40, 32))
-        label.setStringValue_("Additional instructions for the LLM.\nLeave empty to disable.")
-        label.setBezeled_(False)
-        label.setDrawsBackground_(False)
-        label.setEditable_(False)
-        label.setSelectable_(False)
-        label.setFont_(NSFont.systemFontOfSize_(12))
-        label.setTextColor_(NSColor.secondaryLabelColor())
-        label.setLineBreakMode_(NSLineBreakByWordWrapping)
-        content.addSubview_(label)
+        ctrl = _PromptPanelController.alloc().init()
+        ctrl._panel = panel
 
-        # Text editor (NSTextView in NSScrollView)
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 52, W - 40, H - 110))
-        scroll.setHasVerticalScroller_(True)
-        scroll.setBorderType_(2)  # NSBezelBorder
-        tv_frame = NSMakeRect(0, 0, W - 44, H - 114)
-        text_view = NSTextView.alloc().initWithFrame_(tv_frame)
-        text_view.setMinSize_(tv_frame.size)
-        text_view.setMaxSize_(NSMakeRect(0, 0, W - 44, 10000).size)
-        text_view.setVerticallyResizable_(True)
-        text_view.setHorizontallyResizable_(False)
-        text_view.textContainer().setWidthTracksTextView_(True)
-        text_view.setFont_(NSFont.systemFontOfSize_(13))
-        text_view.setAllowsUndo_(True)
+        # Subtitle
+        subtitle = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, IW, 32))
+        subtitle.setStringValue_("Additional instructions for the LLM.\nLeave empty to disable.")
+        subtitle.setBezeled_(False)
+        subtitle.setDrawsBackground_(False)
+        subtitle.setEditable_(False)
+        subtitle.setSelectable_(False)
+        subtitle.setFont_(NSFont.systemFontOfSize_(12))
+        subtitle.setTextColor_(NSColor.secondaryLabelColor())
+        subtitle.setLineBreakMode_(NSLineBreakByWordWrapping)
+        content.addSubview_(subtitle)
+        ctrl._subtitle = subtitle
 
-        current = ""
-        if state.llm_processor:
-            current = state.llm_processor._personal_prompt or ""
-        text_view.setString_(current)
-        scroll.setDocumentView_(text_view)
-        content.addSubview_(scroll)
+        # Personal prompt text view (always editable)
+        pp_scroll, pp_tv = _make_text_view(IW, 120)
+        pp_tv.setString_((state.llm_processor._personal_prompt or "") if state.llm_processor else "")
+        content.addSubview_(pp_scroll)
+        ctrl._personal_scroll = pp_scroll
+        ctrl._personal_tv = pp_tv
 
-        # Cancel button
-        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 190, 12, 80, 30))
+        # System prompt sections (collapsible)
+        ctrl._sections = []
+        section_defs = [
+            ("with_context", "System Prompt (with context)"),
+            ("no_context", "System Prompt (no context)"),
+        ]
+        for i, (variant, label) in enumerate(section_defs):
+            has_context = variant == "with_context"
+
+            # Disclosure button
+            disc = NSButton.alloc().initWithFrame_(NSMakeRect(0, 0, IW, 24))
+            disc.setTitle_(f"\u25B6 {label}")
+            disc.setBordered_(False)
+            disc.setFont_(NSFont.boldSystemFontOfSize_(12))
+            disc.setAlignment_(0)  # NSTextAlignmentLeft
+            disc.setTarget_(ctrl)
+            disc.setAction_("toggleSection:")
+            disc.setTag_(i)
+            content.addSubview_(disc)
+
+            # Info label
+            info = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, IW, 18))
+            info.setBezeled_(False)
+            info.setDrawsBackground_(False)
+            info.setEditable_(False)
+            info.setSelectable_(False)
+            info.setFont_(NSFont.systemFontOfSize_(11))
+            info.setTextColor_(NSColor.tertiaryLabelColor())
+            content.addSubview_(info)
+
+            # System prompt text view (read-only initially)
+            sys_scroll, sys_tv = _make_text_view(IW, 140, editable=False, font_size=12)
+            content.addSubview_(sys_scroll)
+
+            # Edit button
+            edit_btn = NSButton.alloc().initWithFrame_(NSMakeRect(0, 0, 60, 24))
+            edit_btn.setTitle_("Edit")
+            edit_btn.setBezelStyle_(NSBezelStyleRounded)
+            edit_btn.setFont_(NSFont.systemFontOfSize_(11))
+            edit_btn.setTarget_(ctrl)
+            edit_btn.setAction_("editSection:")
+            edit_btn.setTag_(i)
+            content.addSubview_(edit_btn)
+
+            # Reset button
+            reset_btn = NSButton.alloc().initWithFrame_(NSMakeRect(0, 0, 120, 24))
+            reset_btn.setTitle_("Reset to Preset")
+            reset_btn.setBezelStyle_(NSBezelStyleRounded)
+            reset_btn.setFont_(NSFont.systemFontOfSize_(11))
+            reset_btn.setTarget_(ctrl)
+            reset_btn.setAction_("resetSection:")
+            reset_btn.setTag_(i)
+            content.addSubview_(reset_btn)
+
+            # Set initial text and info
+            has_custom = state.llm_processor.has_custom_system_prompt(variant) if state.llm_processor else False
+            if has_custom:
+                sys_text = state.llm_processor.get_active_system_prompt(has_context)
+                info_text = "Custom override"
+            else:
+                sys_text = state.llm_processor.get_preset_system_prompt(has_context) if state.llm_processor else ""
+                preset_name = state.llm_processor._prompt_config.get("display", "") if state.llm_processor else ""
+                info_text = f"From preset: {preset_name}"
+
+            sys_tv.setString_(sys_text)
+            info.setStringValue_(info_text)
+
+            ctrl._sections.append({
+                "variant": variant, "label": label,
+                "disclosure": disc, "info": info,
+                "scroll": sys_scroll, "tv": sys_tv,
+                "edit_btn": edit_btn, "reset_btn": reset_btn,
+                "expanded": False, "editing": False,
+            })
+
+        # Cancel button (Escape)
+        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(0, 0, 80, 30))
         cancel_btn.setTitle_("Cancel")
         cancel_btn.setBezelStyle_(NSBezelStyleRounded)
-        cancel_btn.setTarget_(panel)
-        cancel_btn.setAction_(objc.selector(None, selector=b"close", signature=b"v@:"))
-        cancel_btn.setKeyEquivalent_("\x1b")  # Escape key
+        cancel_btn.setKeyEquivalent_("\x1b")
         content.addSubview_(cancel_btn)
+        ctrl._cancel_btn = cancel_btn
 
-        # Save button
-        save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 100, 12, 80, 30))
+        # Save button (Cmd+S)
+        save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(0, 0, 80, 30))
         save_btn.setTitle_("Save")
         save_btn.setBezelStyle_(NSBezelStyleRounded)
-        save_btn.setKeyEquivalent_("\r")  # Enter key
+        save_btn.setKeyEquivalent_("s")
+        save_btn.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
         content.addSubview_(save_btn)
+        ctrl._save_btn = save_btn
 
+        # Wire save/cancel to stop modal
         app = NSApplication.sharedApplication()
-        # Wire save button to stop modal with OK
         save_btn.setTarget_(app)
         save_btn.setAction_(objc.selector(None, selector=b"stopModalWithCode:", signature=b"v@:q"))
         save_btn.setTag_(NSModalResponseOK)
-        # Wire cancel to stop modal with Cancel
         cancel_btn.setTarget_(app)
         cancel_btn.setAction_(objc.selector(None, selector=b"stopModalWithCode:", signature=b"v@:q"))
         cancel_btn.setTag_(NSModalResponseCancel)
 
-        panel.makeFirstResponder_(text_view)
+        # Layout, center, and show
+        ctrl._relayout(animate=False)
+        panel.center()
+        panel.makeFirstResponder_(pp_tv)
+
         result = app.runModalForWindow_(panel)
         panel.orderOut_(None)
 
         if result == NSModalResponseOK:
-            new_prompt = text_view.string()
+            # Save personal prompt
+            new_personal = pp_tv.string()
             if state.llm_processor:
-                state.llm_processor.set_personal_prompt(new_prompt)
+                state.llm_processor.set_personal_prompt(new_personal)
+
+            # Also save any system prompt sections still in editing mode
+            for sec in ctrl._sections:
+                if sec["editing"] and state.llm_processor:
+                    new_text = sec["tv"].string()
+                    has_ctx = sec["variant"] == "with_context"
+                    preset = state.llm_processor.get_preset_system_prompt(has_ctx)
+                    if new_text.strip() == preset.strip():
+                        state.llm_processor.reset_custom_system_prompt(sec["variant"])
+                    else:
+                        state.llm_processor.set_custom_system_prompt(sec["variant"], new_text)
+
+            # Update menu item title
+            has_active = bool(new_personal.strip())
+            if not has_active and state.llm_processor:
+                has_active = (
+                    state.llm_processor.has_custom_system_prompt("with_context") or
+                    state.llm_processor.has_custom_system_prompt("no_context")
+                )
             if self.personal_prompt_item:
-                if new_prompt.strip():
-                    self.personal_prompt_item.setTitle_("Personal Prompt (Active)")
-                else:
-                    self.personal_prompt_item.setTitle_("Personal Prompt...")
+                self.personal_prompt_item.setTitle_(
+                    "Personal Prompt (Active)" if has_active else "Personal Prompt..."
+                )
 
     def resetMicrophone_(self, sender):
         """Force-reset audio state. Use when microphone gets stuck."""
@@ -1605,7 +1865,7 @@ def setup_menu_bar(shutdown_event):
 
     # Personal Prompt — editable additional instructions for LLM
     has_personal = bool(state.llm_processor and state.llm_processor._personal_prompt)
-    personal_title = "Personal Prompt (Active)" if has_personal else "Personal Prompt..."
+    personal_title = "Prompts..."
     personal_prompt_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         personal_title, "editPersonalPrompt:", ""
     )
