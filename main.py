@@ -30,7 +30,7 @@ from collections import deque
 import objc
 from Quartz import (
     CGEventCreateKeyboardEvent, CGEventKeyboardSetUnicodeString,
-    CGEventPost, kCGHIDEventTap,
+    CGEventPost, CGEventSetFlags, kCGHIDEventTap,
 )
 from ApplicationServices import (
     AXUIElementCreateSystemWide,
@@ -211,6 +211,7 @@ class AppState:
         # Key state tracking
         self.hotkey_pressed = False
         self.space_pressed = False
+        self.cmd_pressed = False
 
         # Text insertion mode
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
@@ -720,6 +721,10 @@ def _type_chunked(text, chunk_size=16, delay=0.008):
         # CGEventKeyboardSetUnicodeString overrides the actual character output)
         event_down = CGEventCreateKeyboardEvent(None, 0, True)
         event_up = CGEventCreateKeyboardEvent(None, 0, False)
+        # Clear modifier flags so held keys (e.g. Cmd+Ctrl from retype shortcut)
+        # don't cause characters to be interpreted as shortcuts
+        CGEventSetFlags(event_down, 0)
+        CGEventSetFlags(event_up, 0)
         CGEventKeyboardSetUnicodeString(event_down, len(chunk), chunk)
         CGEventKeyboardSetUnicodeString(event_up, len(chunk), chunk)
         CGEventPost(kCGHIDEventTap, event_down)
@@ -987,6 +992,10 @@ def on_press(key):
                 state.last_press_time = current_time
                 state.hotkey_pressed = True
 
+                # Cmd held = command combo (e.g. Ctrl+Cmd+C for retype), skip recording
+                if state.cmd_pressed:
+                    return
+
                 # --- Stuck state recovery ---
                 # Detect mode/recording desync (mode set but not recording)
                 if state.mode is not None and not state.is_recording:
@@ -1065,6 +1074,26 @@ def on_press(key):
                         # Convert hold → toggle (recording continues uninterrupted)
                         state.mode = "toggle"
                         logger.debug("Converted hold mode to toggle mode")
+
+            elif key in (Key.cmd, Key.cmd_r, Key.cmd_l):
+                state.cmd_pressed = True
+
+            elif state.hotkey_pressed and state.cmd_pressed and getattr(key, 'vk', None) == 8:
+                # Ctrl+Cmd+C → Retype last transcription
+                # Cancel accidental recording if hotkey was pressed before Cmd
+                if state.is_recording:
+                    _cleanup_stream()
+                    state.is_recording = False
+                    state.audio_buffer.clear()
+                    state.overflow_files = []
+                    state.mode = None
+                    update_menu_bar_icon('idle')
+                    logger.info("Cancelled recording for Retype shortcut")
+                text = state.last_transcription
+                if text:
+                    threading.Thread(target=_type_chunked, args=(text,), daemon=True).start()
+                    logger.info("Retype: typing last transcription via global shortcut")
+
     except Exception as e:
         if logger:
             logger.error(f"Error in on_press handler: {e}")
@@ -1111,6 +1140,9 @@ def on_release(key):
 
             elif key == TOGGLE_KEY:
                 state.space_pressed = False
+
+            elif key in (Key.cmd, Key.cmd_r, Key.cmd_l):
+                state.cmd_pressed = False
     except Exception as e:
         if logger:
             logger.error(f"Error in on_release handler: {e}")
