@@ -230,9 +230,10 @@ class AppState:
         # Media pause/resume during recording
         self.media_was_paused = False  # True if we paused media (so we know to resume)
 
-        # Audio stream cleanup tracking — stores the daemon thread from _cleanup_stream()
-        # so start_recording() can wait for it before creating a new stream
+        # Audio stream cleanup tracking — stores the daemon thread and stream object
+        # from _cleanup_stream() so start_recording() can wait and resetMicrophone_ can abort
         self._pending_cleanup_thread = None
+        self._pending_cleanup_stream = None  # The actual stream being cleaned up
 
 
 # Global state instance
@@ -452,6 +453,7 @@ def start_recording():
         if pending.is_alive():
             logger.error("Previous stream cleanup still running after 3s — proceeding anyway")
     state._pending_cleanup_thread = None
+    state._pending_cleanup_stream = None
 
     state.audio_buffer.clear()
     state.overflow_files = []
@@ -499,12 +501,12 @@ def _cleanup_stream():
         def _close():
             try:
                 if logger:
-                    logger.debug("_cleanup_stream: Calling stream.stop()...")
-                stop_start = time.time()
-                stream.stop()
-                stop_duration = time.time() - stop_start
+                    logger.debug("_cleanup_stream: Calling stream.abort()...")
+                abort_start = time.time()
+                stream.abort()  # Immediate termination, don't wait for pending buffers
+                abort_duration = time.time() - abort_start
                 if logger:
-                    logger.debug(f"_cleanup_stream: stream.stop() took {stop_duration:.3f}s")
+                    logger.debug(f"_cleanup_stream: stream.abort() took {abort_duration:.3f}s")
 
                 if logger:
                     logger.debug("_cleanup_stream: Calling stream.close()...")
@@ -523,8 +525,9 @@ def _cleanup_stream():
         if t.is_alive():
             if logger:
                 logger.warning("Audio stream cleanup timed out (2s) — continuing anyway")
-        # Store thread ref so start_recording() can wait for it before creating a new stream
+        # Store thread + stream ref so start_recording() can wait and resetMicrophone_ can abort
         state._pending_cleanup_thread = t
+        state._pending_cleanup_stream = stream
 
 
 def cleanup_stale_overflow_files():
@@ -1365,18 +1368,26 @@ class MenuDelegate(NSObject):
             state.is_recording = False
             state.mode = None
             state.audio_buffer.clear()
-            old_stream = state.audio_stream
+            # Collect both the current stream AND any zombie stream from a timed-out cleanup
+            streams_to_close = []
+            if state.audio_stream is not None:
+                streams_to_close.append(state.audio_stream)
+            if state._pending_cleanup_stream is not None:
+                streams_to_close.append(state._pending_cleanup_stream)
             state.audio_stream = None
             state._pending_cleanup_thread = None
+            state._pending_cleanup_stream = None
 
-        # Force-close old stream outside the lock (may block briefly)
-        if old_stream is not None:
+        # Force-close all collected streams outside the lock
+        if streams_to_close:
             def _force_close():
-                try:
-                    old_stream.abort()
-                    old_stream.close()
-                except Exception as e:
-                    logger.warning(f"Reset Microphone: error closing stream: {e}")
+                for s in streams_to_close:
+                    try:
+                        logger.debug(f"Reset Microphone: aborting stream {id(s)}")
+                        s.abort()
+                        s.close()
+                    except Exception as e:
+                        logger.warning(f"Reset Microphone: error closing stream: {e}")
             t = threading.Thread(target=_force_close, daemon=True)
             t.start()
             t.join(timeout=3.0)
