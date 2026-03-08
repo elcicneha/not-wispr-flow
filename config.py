@@ -132,24 +132,29 @@ LLM_TEMPERATURE = 0.3
 
 # LLM_PROMPTS: Prompt presets for text enhancement.
 # To add/remove a prompt style, edit only this dict.
-# Each entry needs: display (menu label), system (system prompt),
-# user_with_context and user_no_context (user prompt templates).
+# Each entry needs: display (menu label), system_with_context and system_no_context
+# (system prompts), user_with_context and user_no_context (user prompt templates).
 # Templates use {transcription}, {context_before}, {context_after} placeholders.
 #
 LLM_PROMPTS = {
     "minimal": {
         "display": "Minimal",
-        "system": (
+        "system_with_context": (
             'Fix capitalization, punctuation, remove fillers (um/uh/like). '
             'Handle self-corrections (e.g. "five no wait six" -> "six"). '
             'Return only cleaned text, no quotes, no context, only the part that goes in the blank.'
         ),
+        "system_no_context": (
+            'Fix capitalization, punctuation, remove fillers (um/uh/like). '
+            'Handle self-corrections (e.g. "five no wait six" -> "six"). '
+            'Return only cleaned text, no quotes.'
+        ),
         "user_with_context": '"{context_before} ___ {context_after}"\n\nFill the blank: "{transcription}"',
-        "user_no_context": 'No context available. Treat this as a standalone text. Clean: "{transcription}"',
+        "user_no_context": 'Clean: "{transcription}"',
     },
     "detailed": {
         "display": "Detailed",
-        "system": """\
+        "system_with_context": """\
 You are a deterministic text cleanup engine.
 
 Your task is to clean raw speech-to-text transcription so that it fits naturally \
@@ -169,15 +174,43 @@ You must:
 - Resolve spoken self-corrections
 - Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
 - Preserve wording as much as possible
-- If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all. 
+- If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all.
 
 Rules:
 - If inserting mid-sentence, do NOT capitalize the first word unless grammatically required
+- If the TEXT_BEFORE_CURSOR ends with a punctuation, capitalize accordingly.
 - If inserting at the beginning of a sentence, capitalize appropriately
 - If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
 - Match punctuation style of surrounding text
 - If the insertion connects two sentence fragments, ensure final output flows naturally \
 into TEXT_AFTER_CURSOR
+
+Do not output anything except the cleaned transcription text.
+Never include explanations.
+""",
+        "system_no_context": """\
+You are a deterministic text cleanup engine.
+
+Your task is to clean raw speech-to-text transcription.
+Preserve original wording and meaning. This is not a rewriting task.
+
+You are NOT allowed to:
+- Add new meaning
+- Summarize
+- Rephrase stylistically
+- Add content that was not spoken
+- Remove content unless it is clearly a speech self-correction
+
+You must:
+- Apply proper capitalization
+- Apply correct punctuation
+- Resolve spoken self-corrections
+- Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
+- Preserve wording as much as possible
+- If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all.
+
+Rules:
+- If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
 
 Do not output anything except the cleaned transcription text.
 Never include explanations.
@@ -193,9 +226,7 @@ Output only the cleaned insertion text.""",
         "user_no_context": """\
 RAW_TRANSCRIPTION: "{transcription}"
 
-No cursor context is available. Treat this as standalone text.
-
-Output only the cleaned insertion text.""",
+Output only the cleaned text.""",
     },
 }
 

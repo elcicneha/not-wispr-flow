@@ -262,6 +262,15 @@ class LLMProcessor:
         start_time = time.time()
 
         try:
+            has_context = self._has_context(context_before, context_after)
+            if has_context:
+                self.logger.info(
+                    f"LLM context: before={repr(context_before[-100:] if context_before else None)}, "
+                    f"after={repr(context_after[:100] if context_after else None)}"
+                )
+            else:
+                self.logger.info("LLM context: none (standalone text)")
+
             if self._provider == "gemini":
                 processed_text, response = self._process_gemini(text, context_before, context_after)
             elif self._provider == "groq":
@@ -328,9 +337,9 @@ class LLMProcessor:
         if client is None:
             return text, None
 
-        user_prompt = self._build_user_prompt(text, context_before, context_after)
-
-        system_prompt = self._prompt_config.get("system", "")
+        has_context = self._has_context(context_before, context_after)
+        user_prompt = self._build_user_prompt(text, context_before, context_after, has_context)
+        system_prompt = self._get_system_prompt(has_context)
 
         response = client.chat.completions.create(
             model=self._model,
@@ -345,18 +354,34 @@ class LLMProcessor:
 
     # ── Prompt building ────────────────────────────────────────────────────
 
+    def _has_context(self, context_before: Optional[str], context_after: Optional[str]) -> bool:
+        """Check if meaningful cursor context is available."""
+        return bool(
+            (context_before and context_before.strip()) or
+            (context_after and context_after.strip())
+        )
+
     def _build_prompt(self, text: str, context_before: Optional[str],
                       context_after: Optional[str]) -> str:
         """Build combined prompt for Gemini (system + user in one string)."""
-        system = self._prompt_config.get("system", "")
-        user = self._build_user_prompt(text, context_before, context_after)
+        has_context = self._has_context(context_before, context_after)
+        system = self._get_system_prompt(has_context)
+        user = self._build_user_prompt(text, context_before, context_after, has_context)
         return system + "\n\n" + user
 
+    def _get_system_prompt(self, has_context: bool) -> str:
+        """Get the appropriate system prompt based on whether context is available."""
+        if has_context:
+            return self._prompt_config.get("system_with_context", "")
+        else:
+            return self._prompt_config.get("system_no_context", "")
+
     def _build_user_prompt(self, text: str, context_before: Optional[str],
-                           context_after: Optional[str]) -> str:
+                           context_after: Optional[str],
+                           has_context: Optional[bool] = None) -> str:
         """Build user message from prompt template."""
-        has_context = (context_before and context_before.strip()) or \
-                      (context_after and context_after.strip())
+        if has_context is None:
+            has_context = self._has_context(context_before, context_after)
 
         if has_context:
             template = self._prompt_config.get("user_with_context", 'Clean: "{transcription}"')
