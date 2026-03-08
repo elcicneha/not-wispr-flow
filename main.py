@@ -230,6 +230,10 @@ class AppState:
         # Media pause/resume during recording
         self.media_was_paused = False  # True if we paused media (so we know to resume)
 
+        # Audio stream cleanup tracking — stores the daemon thread from _cleanup_stream()
+        # so start_recording() can wait for it before creating a new stream
+        self._pending_cleanup_thread = None
+
 
 # Global state instance
 state = AppState()
@@ -438,6 +442,17 @@ def start_recording():
     # Clean up any existing stream first (idempotent)
     _cleanup_stream()
 
+    # Wait for any pending cleanup thread from a previous timeout.
+    # Prevents creating a new stream while the old PortAudio stream
+    # is still being torn down by a zombie cleanup thread.
+    pending = state._pending_cleanup_thread
+    if pending is not None and pending.is_alive():
+        logger.warning("Waiting for previous stream cleanup to finish...")
+        pending.join(timeout=3.0)
+        if pending.is_alive():
+            logger.error("Previous stream cleanup still running after 3s — proceeding anyway")
+    state._pending_cleanup_thread = None
+
     state.audio_buffer.clear()
     state.overflow_files = []
     state.overflow_file_counter = 0
@@ -508,6 +523,8 @@ def _cleanup_stream():
         if t.is_alive():
             if logger:
                 logger.warning("Audio stream cleanup timed out (2s) — continuing anyway")
+        # Store thread ref so start_recording() can wait for it before creating a new stream
+        state._pending_cleanup_thread = t
 
 
 def cleanup_stale_overflow_files():
@@ -1112,8 +1129,20 @@ def test_microphone_access():
         )
         test_stream.start()
         time.sleep(0.1)
-        test_stream.stop()
-        test_stream.close()
+
+        # Use timeout to prevent hanging on stop/close (PortAudio can hang)
+        def _close_test_stream():
+            try:
+                test_stream.stop()
+                test_stream.close()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_close_test_stream, daemon=True)
+        t.start()
+        t.join(timeout=3.0)
+        if t.is_alive():
+            logger.warning("Microphone test stream cleanup timed out (3s) — continuing anyway")
 
         logger.info("Microphone access OK")
         return True
@@ -1329,6 +1358,32 @@ class MenuDelegate(NSObject):
         display = LLM_PROMPTS.get(prompt_name, {}).get("display", prompt_name)
         logger.info(f"LLM prompt switched to: {display} ({prompt_name})")
 
+    def resetMicrophone_(self, sender):
+        """Force-reset audio state. Use when microphone gets stuck."""
+        logger.info("Reset Microphone: force-resetting all audio state...")
+        with state.lock:
+            state.is_recording = False
+            state.mode = None
+            state.audio_buffer.clear()
+            old_stream = state.audio_stream
+            state.audio_stream = None
+            state._pending_cleanup_thread = None
+
+        # Force-close old stream outside the lock (may block briefly)
+        if old_stream is not None:
+            def _force_close():
+                try:
+                    old_stream.abort()
+                    old_stream.close()
+                except Exception as e:
+                    logger.warning(f"Reset Microphone: error closing stream: {e}")
+            t = threading.Thread(target=_force_close, daemon=True)
+            t.start()
+            t.join(timeout=3.0)
+
+        update_menu_bar_icon('idle')
+        logger.info("Reset Microphone: done. Ready to record.")
+
     def openLogs_(self, sender):
         """Open the logs directory in Finder."""
         log_dir = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'
@@ -1444,6 +1499,13 @@ def setup_menu_bar(shutdown_event):
     menu.addItem_(prompt_menu_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
+
+    # Reset Microphone — emergency recovery when mic gets stuck
+    reset_mic_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Reset Microphone", "resetMicrophone:", ""
+    )
+    reset_mic_item.setTarget_(delegate)
+    menu.addItem_(reset_mic_item)
 
     # Open Logs
     logs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(

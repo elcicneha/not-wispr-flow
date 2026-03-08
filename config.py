@@ -118,14 +118,13 @@ LLM_MODELS = {
     "gemini-2.5-pro": {"provider": "gemini", "display": "Gemini Pro (Best)", "group": "Gemini"},
     # Groq LLM models (uses same API key as Whisper transcription)
     "llama-3.3-70b-versatile": {"provider": "groq", "display": "Groq Llama 3.3 70B (Best)", "group": "Groq"},
-    "llama-3.1-70b-versatile": {"provider": "groq", "display": "Groq Llama 3.1 70B", "group": "Groq"},
     "llama-3.1-8b-instant": {"provider": "groq", "display": "Groq Llama 3.1 8B (Fastest)", "group": "Groq"},
 }
 
 # LLM_MODEL: Default model selection (must be a key from LLM_MODELS above)
 # Set to "disabled" to turn off LLM processing entirely.
 # Can be changed at runtime via the menu bar "LLM Model" submenu.
-LLM_MODEL = "disabled"
+LLM_MODEL = "llama-3.3-70b-versatile"
 
 # LLM_TEMPERATURE: Controls creativity vs consistency (0.0-1.0)
 # Lower = more consistent corrections, higher = more creative rewrites
@@ -146,7 +145,7 @@ LLM_PROMPTS = {
             'Return only cleaned text, no quotes, no context, only the part that goes in the blank.'
         ),
         "user_with_context": '"{context_before} ___ {context_after}"\n\nFill the blank: "{transcription}"',
-        "user_no_context": 'Clean: "{transcription}"',
+        "user_no_context": 'No context available. Treat this as a standalone text. Clean: "{transcription}"',
     },
     "detailed": {
         "display": "Detailed",
@@ -155,6 +154,7 @@ You are a deterministic text cleanup engine.
 
 Your task is to clean raw speech-to-text transcription so that it fits naturally \
 into an existing document at a specific cursor position.
+Preserve original wording and meaning. This is not a rewriting task
 
 You are NOT allowed to:
 - Add new meaning
@@ -169,20 +169,19 @@ You must:
 - Resolve spoken self-corrections
 - Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
 - Preserve wording as much as possible
-- Make the text grammatically consistent with surrounding context
+- If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all. 
 
 Rules:
 - If inserting mid-sentence, do NOT capitalize the first word unless grammatically required
 - If inserting at the beginning of a sentence, capitalize appropriately
 - If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
-- If a sentence is unfinished and clearly abandoned, remove the abandoned fragment
 - Match punctuation style of surrounding text
 - If the insertion connects two sentence fragments, ensure final output flows naturally \
 into TEXT_AFTER_CURSOR
 
-Do not output anything except the cleaned insertion text.
+Do not output anything except the cleaned transcription text.
 Never include explanations.
-Output only the corrected insertion text.""",
+""",
         "user_with_context": """\
 TEXT_BEFORE_CURSOR: "{context_before}"
 
@@ -193,6 +192,8 @@ TEXT_AFTER_CURSOR: "{context_after}"
 Output only the cleaned insertion text.""",
         "user_no_context": """\
 RAW_TRANSCRIPTION: "{transcription}"
+
+No cursor context is available. Treat this as standalone text.
 
 Output only the cleaned insertion text.""",
     },
@@ -232,4 +233,4 @@ PAUSE_MEDIA_ON_RECORD = True
 # Enable verbose logging (writes to ~/Library/Logs/NotWisprFlow/notwisprflow.log)
 # Set to True if experiencing issues, then check logs for detailed diagnostics.
 #
-DEBUG = True
+DEBUG = False
