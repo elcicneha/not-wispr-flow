@@ -106,6 +106,9 @@ class LLMProcessor:
         self._daily_output_tokens = 0
         self._tracking_date = time.strftime("%Y-%m-%d")
 
+        # Personal prompt (additional instructions appended to system prompt)
+        self._personal_prompt = load_preference("personal_prompt", "")
+
         # Set initial model (also sets self._provider, self.enabled)
         self._model = None
         self._provider = None
@@ -164,6 +167,15 @@ class LLMProcessor:
         self._prompt_name = prompt_name
         self._prompt_config = prompt_config
         self.logger.info(f"LLM prompt switched to: {prompt_config['display']} ({prompt_name})")
+
+    def set_personal_prompt(self, text: str):
+        """Set personal prompt (additional instructions appended to system prompt)."""
+        self._personal_prompt = text.strip()
+        save_preference("personal_prompt", self._personal_prompt)
+        if self._personal_prompt:
+            self.logger.info(f"Personal prompt set ({len(self._personal_prompt)} chars)")
+        else:
+            self.logger.info("Personal prompt cleared")
 
     @property
     def model(self) -> str:
@@ -372,9 +384,12 @@ class LLMProcessor:
     def _get_system_prompt(self, has_context: bool) -> str:
         """Get the appropriate system prompt based on whether context is available."""
         if has_context:
-            return self._prompt_config.get("system_with_context", "")
+            prompt = self._prompt_config.get("system_with_context", "")
         else:
-            return self._prompt_config.get("system_no_context", "")
+            prompt = self._prompt_config.get("system_no_context", "")
+        if self._personal_prompt:
+            prompt += "\n\nAdditional instructions:\n" + self._personal_prompt
+        return prompt
 
     def _build_user_prompt(self, text: str, context_before: Optional[str],
                            context_after: Optional[str],

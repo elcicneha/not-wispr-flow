@@ -44,8 +44,14 @@ from AppKit import (
     NSApplication, NSStatusBar, NSMenu, NSMenuItem,
     NSVariableStatusItemLength, NSObject, NSOnState, NSOffState,
     NSImage, NSPasteboard, NSData,
-    NSEventModifierFlagControl, NSEventModifierFlagCommand
+    NSEventModifierFlagControl, NSEventModifierFlagCommand,
+    NSScrollView, NSTextView, NSPanel, NSButton, NSTextField,
+    NSBezelStyleRounded, NSFont, NSColor,
+    NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
+    NSBackingStoreBuffered, NSModalResponseOK, NSModalResponseCancel,
+    NSTextAlignmentCenter, NSLineBreakByWordWrapping,
 )
+from Foundation import NSMakeRect
 
 # ============================================================================
 # User Configuration - imported from config.py
@@ -1293,11 +1299,12 @@ def acquire_pid_lock():
 # ============================================================================
 
 class MenuDelegate(NSObject):
-    """Handles all menu bar actions: Retype Last, Paste Mode toggle, LLM Model/Prompt pickers, Quit."""
+    """Handles all menu bar actions: Retype Last, Paste Mode toggle, LLM Model/Prompt pickers, Personal Prompt, Quit."""
     shutdown_event = None
     paste_mode_item = None
     llm_model_items = None   # dict: model_name -> NSMenuItem
     llm_prompt_items = None  # dict: prompt_name -> NSMenuItem
+    personal_prompt_item = None
 
     def retypeLast_(self, sender):
         """Type last transcription character-by-character in a background thread."""
@@ -1360,6 +1367,93 @@ class MenuDelegate(NSObject):
 
         display = LLM_PROMPTS.get(prompt_name, {}).get("display", prompt_name)
         logger.info(f"LLM prompt switched to: {display} ({prompt_name})")
+
+    def editPersonalPrompt_(self, sender):
+        """Open a clean panel to edit the personal prompt (additional LLM instructions)."""
+        W, H = 420, 280
+        panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, W, H),
+            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
+            NSBackingStoreBuffered,
+            False,
+        )
+        panel.setTitle_("Personal Prompt")
+        panel.center()
+
+        content = panel.contentView()
+
+        # Subtitle label
+        label = NSTextField.alloc().initWithFrame_(NSMakeRect(20, H - 52, W - 40, 32))
+        label.setStringValue_("Additional instructions for the LLM.\nLeave empty to disable.")
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        label.setSelectable_(False)
+        label.setFont_(NSFont.systemFontOfSize_(12))
+        label.setTextColor_(NSColor.secondaryLabelColor())
+        label.setLineBreakMode_(NSLineBreakByWordWrapping)
+        content.addSubview_(label)
+
+        # Text editor (NSTextView in NSScrollView)
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 52, W - 40, H - 110))
+        scroll.setHasVerticalScroller_(True)
+        scroll.setBorderType_(2)  # NSBezelBorder
+        tv_frame = NSMakeRect(0, 0, W - 44, H - 114)
+        text_view = NSTextView.alloc().initWithFrame_(tv_frame)
+        text_view.setMinSize_(tv_frame.size)
+        text_view.setMaxSize_(NSMakeRect(0, 0, W - 44, 10000).size)
+        text_view.setVerticallyResizable_(True)
+        text_view.setHorizontallyResizable_(False)
+        text_view.textContainer().setWidthTracksTextView_(True)
+        text_view.setFont_(NSFont.systemFontOfSize_(13))
+        text_view.setAllowsUndo_(True)
+
+        current = ""
+        if state.llm_processor:
+            current = state.llm_processor._personal_prompt or ""
+        text_view.setString_(current)
+        scroll.setDocumentView_(text_view)
+        content.addSubview_(scroll)
+
+        # Cancel button
+        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 190, 12, 80, 30))
+        cancel_btn.setTitle_("Cancel")
+        cancel_btn.setBezelStyle_(NSBezelStyleRounded)
+        cancel_btn.setTarget_(panel)
+        cancel_btn.setAction_(objc.selector(None, selector=b"close", signature=b"v@:"))
+        cancel_btn.setKeyEquivalent_("\x1b")  # Escape key
+        content.addSubview_(cancel_btn)
+
+        # Save button
+        save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 100, 12, 80, 30))
+        save_btn.setTitle_("Save")
+        save_btn.setBezelStyle_(NSBezelStyleRounded)
+        save_btn.setKeyEquivalent_("\r")  # Enter key
+        content.addSubview_(save_btn)
+
+        app = NSApplication.sharedApplication()
+        # Wire save button to stop modal with OK
+        save_btn.setTarget_(app)
+        save_btn.setAction_(objc.selector(None, selector=b"stopModalWithCode:", signature=b"v@:q"))
+        save_btn.setTag_(NSModalResponseOK)
+        # Wire cancel to stop modal with Cancel
+        cancel_btn.setTarget_(app)
+        cancel_btn.setAction_(objc.selector(None, selector=b"stopModalWithCode:", signature=b"v@:q"))
+        cancel_btn.setTag_(NSModalResponseCancel)
+
+        panel.makeFirstResponder_(text_view)
+        result = app.runModalForWindow_(panel)
+        panel.orderOut_(None)
+
+        if result == NSModalResponseOK:
+            new_prompt = text_view.string()
+            if state.llm_processor:
+                state.llm_processor.set_personal_prompt(new_prompt)
+            if self.personal_prompt_item:
+                if new_prompt.strip():
+                    self.personal_prompt_item.setTitle_("Personal Prompt (Active)")
+                else:
+                    self.personal_prompt_item.setTitle_("Personal Prompt...")
 
     def resetMicrophone_(self, sender):
         """Force-reset audio state. Use when microphone gets stuck."""
@@ -1508,6 +1602,16 @@ def setup_menu_bar(shutdown_event):
     prompt_menu_item.setSubmenu_(prompt_submenu)
     delegate.llm_prompt_items = llm_prompt_items
     menu.addItem_(prompt_menu_item)
+
+    # Personal Prompt — editable additional instructions for LLM
+    has_personal = bool(state.llm_processor and state.llm_processor._personal_prompt)
+    personal_title = "Personal Prompt (Active)" if has_personal else "Personal Prompt..."
+    personal_prompt_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        personal_title, "editPersonalPrompt:", ""
+    )
+    personal_prompt_item.setTarget_(delegate)
+    delegate.personal_prompt_item = personal_prompt_item
+    menu.addItem_(personal_prompt_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
 
