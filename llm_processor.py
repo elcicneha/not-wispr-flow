@@ -14,7 +14,7 @@ import os
 import time
 from typing import Optional, Tuple
 
-from config import LLM_MODELS, LLM_PROMPTS
+from config import LLM_MODELS, LLM_PROMPTS, GEMINI_API_KEY, GROQ_API_KEY
 
 # ============================================================================
 # PREFERENCES PERSISTENCE
@@ -139,7 +139,7 @@ class LLMProcessor:
         if self._provider is None:
             self.enabled = False
             if log:
-                self.logger.info("LLM post-processing: Disabled")
+                self.logger.debug("LLM post-processing: Disabled")
         elif self._provider == "gemini" and not self._gemini_api_key:
             self.enabled = False
             if log:
@@ -157,7 +157,7 @@ class LLMProcessor:
         else:
             self.enabled = True
             if log:
-                self.logger.info(
+                self.logger.debug(
                     f"LLM post-processing: Enabled "
                     f"(model: {self._model}, provider: {self._provider})"
                 )
@@ -177,9 +177,9 @@ class LLMProcessor:
         self._personal_prompt = text.strip()
         save_preference("personal_prompt", self._personal_prompt)
         if self._personal_prompt:
-            self.logger.info(f"Personal prompt set ({len(self._personal_prompt)} chars)")
+            self.logger.debug(f"Personal prompt set ({len(self._personal_prompt)} chars)")
         else:
-            self.logger.info("Personal prompt cleared")
+            self.logger.debug("Personal prompt cleared")
 
     def set_custom_system_prompt(self, variant: str, text: str):
         """Set a custom system prompt override for a specific variant."""
@@ -191,7 +191,7 @@ class LLMProcessor:
             self._custom_system_no_context = text
             save_preference("custom_system_no_context", text)
         status = f"set ({len(text)} chars)" if text else "cleared"
-        self.logger.info(f"Custom system prompt ({variant}): {status}")
+        self.logger.debug(f"Custom system prompt ({variant}): {status}")
 
     def has_custom_system_prompt(self, variant: str) -> bool:
         if variant == "with_context":
@@ -224,10 +224,14 @@ class LLMProcessor:
 
     @staticmethod
     def _resolve_gemini_api_key(logger) -> str:
-        """Resolve Gemini API key from env var or dotfile."""
+        """Resolve Gemini API key from config.py → env var → dotfile."""
+        if GEMINI_API_KEY:
+            logger.debug("Gemini API key: found in config.py")
+            return GEMINI_API_KEY
+
         env_key = os.environ.get("GEMINI_API_KEY", "")
         if env_key:
-            logger.info("Gemini API key: found in environment variable")
+            logger.debug("Gemini API key: found in environment variable")
             return env_key
 
         key_file = os.path.expanduser("~/.config/notwisprflow/gemini_api_key")
@@ -236,7 +240,7 @@ class LLMProcessor:
                 with open(key_file, "r") as f:
                     key = f.read().strip()
                 if key:
-                    logger.info(f"Gemini API key: found in {key_file}")
+                    logger.debug(f"Gemini API key: found in {key_file}")
                     return key
             except Exception as e:
                 logger.warning(f"Failed to read Gemini API key from {key_file}: {e}")
@@ -245,10 +249,14 @@ class LLMProcessor:
 
     @staticmethod
     def _resolve_groq_api_key(logger) -> str:
-        """Resolve Groq API key from env var or dotfile (same key as Whisper transcription)."""
+        """Resolve Groq API key from config.py → env var → dotfile (same key as Whisper transcription)."""
+        if GROQ_API_KEY:
+            logger.debug("Groq LLM API key: found in config.py")
+            return GROQ_API_KEY
+
         env_key = os.environ.get("GROQ_API_KEY", "")
         if env_key:
-            logger.info("Groq LLM API key: found in environment variable")
+            logger.debug("Groq LLM API key: found in environment variable")
             return env_key
 
         key_file = os.path.expanduser("~/.config/notwisprflow/api_key")
@@ -257,7 +265,7 @@ class LLMProcessor:
                 with open(key_file, "r") as f:
                     key = f.read().strip()
                 if key:
-                    logger.info(f"Groq LLM API key: found in {key_file}")
+                    logger.debug(f"Groq LLM API key: found in {key_file}")
                     return key
             except Exception as e:
                 logger.warning(f"Failed to read Groq API key from {key_file}: {e}")

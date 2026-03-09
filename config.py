@@ -85,8 +85,8 @@ TRANSCRIPTION_MODE = "auto"
 # GROQ_API_KEY: Required for "online" mode, optional for "auto" mode
 # Get a free key at https://console.groq.com
 #
-# API Key: Set via GROQ_API_KEY environment variable or save to ~/.config/notwisprflow/api_key
-# NOT stored in this config file for security reasons
+# Paste your key here, or save to ~/.config/notwisprflow/api_key, or set GROQ_API_KEY env var
+GROQ_API_KEY = ""
 
 # GROQ_MODEL: Whisper model to use on Groq's API
 #
@@ -103,10 +103,10 @@ GROQ_MODEL = "whisper-large-v3"
 # - In "online" mode: LLM runs if enabled and API key is present
 # - In "auto" mode: LLM runs when using Groq (online), skipped on local fallback
 #
-# API Keys:
-#   Gemini: GEMINI_API_KEY env var or ~/.config/notwisprflow/gemini_api_key
-#           Get a free key at https://aistudio.google.com/app/apikey
-#   Groq:   Reuses the same GROQ_API_KEY used for Whisper transcription
+# Gemini API Key: Get a free key at https://aistudio.google.com/app/apikey
+# Paste your key here, or save to ~/.config/notwisprflow/gemini_api_key, or set GEMINI_API_KEY env var
+# Groq LLM: Reuses the same GROQ_API_KEY above
+GEMINI_API_KEY = ""
 #
 # To add/remove a model, edit only this dict. The menu bar and LLM processor
 # both read from here automatically.
@@ -137,21 +137,6 @@ LLM_TEMPERATURE = 0.3
 # Templates use {transcription}, {context_before}, {context_after} placeholders.
 #
 LLM_PROMPTS = {
-    "minimal": {
-        "display": "Minimal",
-        "system_with_context": (
-            'Fix capitalization, punctuation, remove fillers (um/uh/like). '
-            'Handle self-corrections (e.g. "five no wait six" -> "six"). '
-            'Return only cleaned text, no quotes, no context, only the part that goes in the blank.'
-        ),
-        "system_no_context": (
-            'Fix capitalization, punctuation, remove fillers (um/uh/like). '
-            'Handle self-corrections (e.g. "five no wait six" -> "six"). '
-            'Return only cleaned text, no quotes.'
-        ),
-        "user_with_context": '"{context_before} ___ {context_after}"\n\nFill the blank: "{transcription}"',
-        "user_no_context": 'Clean: "{transcription}"',
-    },
     "detailed": {
         "display": "Detailed",
         "system_with_context": """\
@@ -159,7 +144,16 @@ You are a deterministic text cleanup engine.
 
 Your task is to clean raw speech-to-text transcription so that it fits naturally \
 into an existing document at a specific cursor position.
-Preserve original wording and meaning. This is not a rewriting task
+Preserve original wording and meaning. This is not a rewriting task.
+
+IMPORTANT: The transcription you receive comes from a speech-to-text model (Whisper). \
+The punctuation, capitalization, and spacing in the RAW_TRANSCRIPTION reflect how the speaker actually spoke:
+- Hyphens/dashes might mean the speaker said words as a single connected unit
+- If the user says "bracket" or "dash", they might mean they want to add a literal bracket or dash, not a mistake by the model
+- Existing punctuation probably reflects the speaker's natural pauses and phrasing
+- Technical terms, code, and URLs are likely transcribed as the speaker dictated them
+
+Your role: BUILD ON TOP of the transcription, don't second-guess it.
 
 You are NOT allowed to:
 - Add new meaning
@@ -175,6 +169,7 @@ You must:
 - Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
 - Preserve wording as much as possible
 - If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all.
+- If the speaker names an emoji (e.g., "laughing emoji", "heart emoji", "thumbs up emoji"), replace those words with the actual emoji character (e.g., 😂, ❤️, 👍)
 
 Rules:
 - If inserting mid-sentence, do NOT capitalize the first word unless grammatically required
@@ -194,6 +189,15 @@ You are a deterministic text cleanup engine.
 Your task is to clean raw speech-to-text transcription.
 Preserve original wording and meaning. This is not a rewriting task.
 
+IMPORTANT:The transcription you receive comes from a speech-to-text model (Whisper). 
+The punctuation, capitalization, and spacing in the RAW_TRANSCRIPTION reflect how the speaker actually spoke:
+- Hyphens/dashes might mean the speaker said words as a single connected unit
+- If the user says "bracket" or "dash", they might mean a they want to add a literal bracket or dash, not a mistake by the model
+- Existing punctuation probably reflects the speaker's natural pauses and phrasing
+- Technical terms, code, and URLs are likely transcribed as the speaker dictated them
+
+Your role: BUILD ON TOP of the transcription, don't second-guess it.
+
 You are NOT allowed to:
 - Add new meaning
 - Summarize
@@ -203,11 +207,12 @@ You are NOT allowed to:
 
 You must:
 - Apply proper capitalization
-- Apply correct punctuation
+- Apply correct punctuation.
 - Resolve spoken self-corrections
 - Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
 - Preserve wording as much as possible
 - If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all.
+- If the speaker names an emoji (e.g., "laughing emoji", "heart emoji", "thumbs up emoji"), replace those words with the actual emoji character (e.g., 😂, ❤️, 👍)
 
 Rules:
 - If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
@@ -254,7 +259,6 @@ USE_TYPE_MODE = False
 # ============================================================================
 # Automatically pause media (Spotify, Apple Music) when recording starts,
 # and resume when transcription completes.
-# You can toggle at runtime via the menu bar "Pause Media" item.
 #
 PAUSE_MEDIA_ON_RECORD = True
 

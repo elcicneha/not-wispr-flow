@@ -146,10 +146,10 @@ def _initialize_vad(logger):
             logger.error("App bundle may be corrupted. Please reinstall.")
             return None, None
 
-        logger.info(f"Loading Silero VAD from {model_path}")
+        logger.debug(f"Loading Silero VAD from {model_path}")
         model = SileroVADOnnx(model_path)
         utils = (_get_speech_timestamps_numpy,)
-        logger.info("Silero VAD model loaded successfully")
+        logger.info("Silero VAD loaded")
         return model, utils
 
     except Exception as e:
@@ -281,12 +281,11 @@ class TranscriptionManager:
             self._validate_groq_key()
         elif self.mode == "auto":
             if self._groq_api_key:
-                self.logger.info(f"Auto mode: Groq API key found, will use Groq with local fallback")
+                self.logger.debug("Auto mode: Groq API key found, will use Groq with local fallback")
                 # Don't load model yet - will load on-demand if needed
                 self._start_connectivity_monitor()
             else:
-                self.logger.info("Auto mode: No Groq API key configured, using local transcription only")
-                self.logger.info("Set GROQ_API_KEY in config.py or environment to enable cloud transcription")
+                self.logger.debug("Auto mode: No Groq API key configured, using local transcription only")
                 self._load_local_model()
 
     def transcribe(self, audio_float):
@@ -363,12 +362,12 @@ class TranscriptionManager:
         _KEY_FILE = os.path.expanduser("~/.config/notwisprflow/api_key")
 
         if config_key:
-            logger.info("Groq API key: found in config.py")
+            logger.debug("Groq API key: found in config.py")
             return config_key
 
         env_key = os.environ.get("GROQ_API_KEY", "")
         if env_key:
-            logger.info("Groq API key: found in environment variable")
+            logger.debug("Groq API key: found in environment variable")
             return env_key
 
         if os.path.exists(_KEY_FILE):
@@ -376,7 +375,7 @@ class TranscriptionManager:
                 with open(_KEY_FILE, "r") as f:
                     file_key = f.read().strip()
                 if file_key:
-                    logger.info(f"Groq API key: found in {_KEY_FILE}")
+                    logger.debug(f"Groq API key: found in {_KEY_FILE}")
                     return file_key
             except Exception as e:
                 logger.warning(f"Failed to read API key from {_KEY_FILE}: {e}")

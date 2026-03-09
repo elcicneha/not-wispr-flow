@@ -13,6 +13,9 @@ from setuptools import setup
 # (needed for complex packages like scipy, numpy, etc.)
 sys.setrecursionlimit(10000)
 
+# Detect Python version dynamically (e.g. "3.14", "3.12")
+PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
+
 APP = ['main.py']
 DATA_FILES = [
     ('', [
@@ -37,7 +40,7 @@ DATA_FILES = [
     ('resources', ['resources/silero_vad.onnx']),
     # MLX Metal shader library (will be moved to Frameworks by install script)
     ('', [
-        'venv/lib/python3.14/site-packages/mlx/lib/mlx.metallib',
+        f'venv/lib/python{PYTHON_VERSION}/site-packages/mlx/lib/mlx.metallib',
     ])
 ]
 
@@ -117,7 +120,7 @@ OPTIONS = {
 
     # Frameworks to bundle (PyObjC frameworks for keyboard control)
     'frameworks': [
-        'venv/lib/python3.14/site-packages/mlx/lib/libmlx.dylib',
+        f'venv/lib/python{PYTHON_VERSION}/site-packages/mlx/lib/libmlx.dylib',
     ],
 
     # Don't include these packages (reduce bundle size)

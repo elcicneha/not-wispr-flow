@@ -57,10 +57,10 @@ from Foundation import NSMakeRect
 # User Configuration - imported from config.py
 # ============================================================================
 from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
-                    TRANSCRIPTION_MODE, GROQ_MODEL,
+                    TRANSCRIPTION_MODE, GROQ_MODEL, GROQ_API_KEY,
                     LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
-                    LLM_PROMPT, LLM_PROMPTS, USE_TYPE_MODE,
-                    PAUSE_MEDIA_ON_RECORD)
+                    LLM_PROMPT, USE_TYPE_MODE,
+                    PAUSE_MEDIA_ON_RECORD, GEMINI_API_KEY)
 from transcription import TranscriptionManager
 from llm_processor import LLMProcessor, load_preference, save_preference
 from media_control import pause_media, resume_media
@@ -826,7 +826,7 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
         # Check minimum duration
         duration = len(audio_float) / SAMPLE_RATE
         if duration < MIN_RECORDING_DURATION:
-            logger.info(f"Audio too short ({duration:.2f}s), skipping transcription (minimum: {MIN_RECORDING_DURATION}s)")
+            logger.debug(f"Audio too short ({duration:.2f}s), skipping")
             return
 
         logger.debug(f"Transcribing {duration:.2f}s of audio...")
@@ -852,7 +852,7 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None, 
             backend = "unknown"
 
         if not text:
-            logger.info("No speech detected")
+            logger.info("Transcription returned empty text")
             return
 
         # Log original transcription (before post-processing)
@@ -1018,11 +1018,11 @@ def on_press(key):
                     state.overflow_files = []
                     state.mode = None
                     update_menu_bar_icon('idle')
-                    logger.info("Cancelled recording for Retype shortcut")
+                    logger.debug("Cancelled recording for Retype shortcut")
                 text = state.last_transcription
                 if text:
                     threading.Thread(target=_type_chunked, args=(text,), daemon=True).start()
-                    logger.info("Retype: typing last transcription via global shortcut")
+                    logger.debug("Retype: typing last transcription via global shortcut")
 
     except Exception as e:
         if logger:
@@ -1090,14 +1090,14 @@ def test_microphone_access():
         bool: True if microphone is accessible, False otherwise
     """
     try:
-        logger.info("Testing microphone access...")
+        logger.debug("Testing microphone access...")
 
         # Try to record a brief test via SoundCard (CoreAudio)
         mic = sc.default_microphone()
         with mic.recorder(samplerate=SAMPLE_RATE, channels=[0]) as rec:
             rec.record(numframes=SAMPLE_RATE // 10)  # 100ms test
 
-        logger.info("Microphone access OK")
+        logger.debug("Microphone access OK")
         return True
 
     except Exception as e:
@@ -1189,7 +1189,7 @@ def check_accessibility_permission():
         bool: True if granted, exits with code 0 if not
     """
     if is_accessibility_trusted():
-        logger.info("Accessibility permission: OK")
+        logger.debug("Accessibility permission: OK")
         return True
 
     logger.warning("Accessibility permission not granted. Opening System Settings...")
@@ -1216,7 +1216,7 @@ def check_accessibility_permission():
 PID_FILE = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow' / 'notwisprflow.pid'
 OVERFLOW_DIR = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'  # Reuses log dir (already 0o700)
 OVERFLOW_PREFIX = "notwisprflow_overflow_"
-STATS_FILE = Path(__file__).resolve().parent / 'recording_stats.jsonl'
+STATS_FILE = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow' / 'recording_stats.jsonl'
 
 
 def acquire_pid_lock():
@@ -1418,7 +1418,6 @@ class MenuDelegate(NSObject):
     shutdown_event = None
     paste_mode_item = None
     llm_model_items = None   # dict: model_name -> NSMenuItem
-    llm_prompt_items = None  # dict: prompt_name -> NSMenuItem
     personal_prompt_item = None
 
     def retypeLast_(self, sender):
@@ -1440,7 +1439,7 @@ class MenuDelegate(NSObject):
                 NSOffState if state.use_type_mode else NSOnState
             )
         mode_name = "Type" if state.use_type_mode else "Paste"
-        logger.info(f"Text insertion mode: {mode_name}")
+        logger.debug(f"Text insertion mode: {mode_name}")
 
     def selectLLMModel_(self, sender):
         """Switch LLM model (radio-button style selection)."""
@@ -1463,25 +1462,6 @@ class MenuDelegate(NSObject):
 
         display = LLM_MODELS.get(model_name, {}).get("display", model_name)
         logger.info(f"LLM model switched to: {display} ({model_name})")
-
-    def selectLLMPrompt_(self, sender):
-        """Switch LLM prompt style (radio-button style selection)."""
-        prompt_name = sender.representedObject()
-        if prompt_name is None:
-            return
-
-        state.llm_prompt = prompt_name
-        if state.llm_processor:
-            state.llm_processor.switch_prompt(prompt_name)
-
-        save_preference("llm_prompt", prompt_name)
-
-        if self.llm_prompt_items:
-            for name, item in self.llm_prompt_items.items():
-                item.setState_(NSOnState if name == prompt_name else NSOffState)
-
-        display = LLM_PROMPTS.get(prompt_name, {}).get("display", prompt_name)
-        logger.info(f"LLM prompt switched to: {display} ({prompt_name})")
 
     def editPersonalPrompt_(self, sender):
         """Open panel to edit personal prompt and system prompt overrides."""
@@ -1659,20 +1639,6 @@ class MenuDelegate(NSObject):
                     "Personal Prompt (Active)" if has_active else "Personal Prompt..."
                 )
 
-    def resetMicrophone_(self, sender):
-        """Force-reset audio state. Use when microphone gets stuck."""
-        logger.info("Reset Microphone: force-resetting all audio state...")
-        with state.lock:
-            state.is_recording = False  # Recording thread will exit its loop
-            state.mode = None
-            state.audio_buffer.clear()
-            state.overflow_files = []
-            state.overflow_file_counter = 0
-        # Recording thread exits naturally when is_recording becomes False,
-        # and its context manager cleanly releases CoreAudio resources.
-        update_menu_bar_icon('idle')
-        logger.info("Reset Microphone: done. Ready to record.")
-
     def openLogs_(self, sender):
         """Open the logs directory in Finder."""
         log_dir = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'
@@ -1765,28 +1731,6 @@ def setup_menu_bar(shutdown_event):
     delegate.llm_model_items = llm_model_items
     menu.addItem_(llm_menu_item)
 
-    # LLM Prompt submenu — built from LLM_PROMPTS in config.py
-    prompt_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "LLM Prompt", None, ""
-    )
-    prompt_submenu = NSMenu.alloc().init()
-    llm_prompt_items = {}
-    current_prompt = state.llm_prompt
-
-    for prompt_name, prompt_info in LLM_PROMPTS.items():
-        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            prompt_info["display"], "selectLLMPrompt:", ""
-        )
-        item.setTarget_(delegate)
-        item.setRepresentedObject_(prompt_name)
-        item.setState_(NSOnState if prompt_name == current_prompt else NSOffState)
-        prompt_submenu.addItem_(item)
-        llm_prompt_items[prompt_name] = item
-
-    prompt_menu_item.setSubmenu_(prompt_submenu)
-    delegate.llm_prompt_items = llm_prompt_items
-    menu.addItem_(prompt_menu_item)
-
     # Personal Prompt — editable additional instructions for LLM
     has_personal = bool(state.llm_processor and state.llm_processor._personal_prompt)
     personal_title = "Prompts..."
@@ -1798,13 +1742,6 @@ def setup_menu_bar(shutdown_event):
     menu.addItem_(personal_prompt_item)
 
     menu.addItem_(NSMenuItem.separatorItem())
-
-    # Reset Microphone — emergency recovery when mic gets stuck
-    reset_mic_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Reset Microphone", "resetMicrophone:", ""
-    )
-    reset_mic_item.setTarget_(delegate)
-    menu.addItem_(reset_mic_item)
 
     # Open Logs
     logs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -1886,10 +1823,7 @@ def main():
         sys.exit(0)
     atexit.register(lambda: pid_lock.close())
 
-    logger.info("=" * 60)
-    logger.info("Not Wispr Flow - Voice Dictation Tool")
-    logger.info("=" * 60)
-    logger.info("")
+    logger.info("--- Not Wispr Flow starting ---")
 
     # Check microphone permissions
     if not test_microphone_access():
@@ -1901,7 +1835,7 @@ def main():
     # Initialize transcription manager (handles Groq API + local MLX Whisper + VAD)
     state.transcription_manager = TranscriptionManager(
         mode=TRANSCRIPTION_MODE,
-        groq_api_key="",  # Resolved from env/dotfile inside TranscriptionManager
+        groq_api_key=GROQ_API_KEY,
         groq_model=GROQ_MODEL,
         whisper_model=WHISPER_MODEL,
         language=LANGUAGE,
@@ -1920,25 +1854,9 @@ def main():
     # Initialize keyboard controller
     state.keyboard_controller = Controller()
 
-    # Print usage instructions
-    logger.info("=" * 60)
-    logger.info("Not Wispr Flow is now running!")
-    logger.info("=" * 60)
-    logger.info("")
-    hotkey_name = ", ".join(str(k).replace("Key.", "") for k in HOTKEY_KEYS)
-    logger.info("Usage:")
-    logger.info("  Press-and-Hold Mode:")
-    logger.info(f"    - Hold [{hotkey_name}], speak, release to transcribe")
-    logger.info("")
-    logger.info("  Toggle/Hands-Free Mode:")
-    logger.info(f"    - Press [{hotkey_name}] + Space together, then speak")
-    logger.info(f"    - Press [{hotkey_name}] again to stop and transcribe")
-    logger.info("")
+    # Log startup summary
     llm_display = LLM_MODELS.get(state.llm_model, {}).get("display", state.llm_model)
-    prompt_display = LLM_PROMPTS.get(state.llm_prompt, {}).get("display", state.llm_prompt)
-    logger.info(f"Settings: Mode={TRANSCRIPTION_MODE}, Model={WHISPER_MODEL}, LLM={llm_display}, Prompt={prompt_display}, Debug={'ON' if DEBUG else 'OFF'}")
-    logger.info("=" * 60)
-    logger.info("")
+    logger.info(f"Ready | Mode={TRANSCRIPTION_MODE}, LLM={llm_display}, Debug={'ON' if DEBUG else 'OFF'}")
 
     # Shutdown via flag — signal handler only sets the flag, no I/O
     shutdown_event = threading.Event()

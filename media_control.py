@@ -76,7 +76,7 @@ def pause_media(logger):
         if not is_media_playing():
             return False
         _send_command(_MR_COMMAND_PAUSE, None)
-        logger.info("Paused system media (MediaRemote)")
+        logger.debug("Paused system media")
         return True
     except Exception as e:
         logger.debug(f"Media pause failed: {e}")
@@ -89,6 +89,6 @@ def resume_media(logger):
         return
     try:
         _send_command(_MR_COMMAND_PLAY, None)
-        logger.info("Resumed system media (MediaRemote)")
+        logger.debug("Resumed system media")
     except Exception as e:
         logger.debug(f"Media resume failed: {e}")
