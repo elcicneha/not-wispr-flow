@@ -37,7 +37,7 @@ def post_process(text, context_before, context_after, backend="unknown", llm_mod
     if llm_active and backend == "groq":
         text, llm_time = llm_processor.process(text, context_before, context_after)
         if llm_time > 0:
-            logger.info(f"LLM enhanced:  {text} ({llm_time:.2f}s)")
+            logger.info(f"LLM final:  {text} ({llm_time:.2f}s)")
     elif llm_active and backend == "local":
         logger.debug("LLM processing skipped (local/offline transcription)")
     elif llm_model == "disabled" and backend == "groq":

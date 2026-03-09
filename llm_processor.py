@@ -337,6 +337,9 @@ class LLMProcessor:
 
             processing_time = time.time() - start_time
 
+            # Log raw LLM output before any validation
+            self.logger.info(f"LLM output:  {processed_text} ({processing_time:.2f}s)")
+
             # Track usage
             if response is not None:
                 self._track_usage(self._extract_token_usage(response))
@@ -344,13 +347,6 @@ class LLMProcessor:
             # Validate output
             if not processed_text:
                 self.logger.warning("LLM returned empty response, using original text")
-                return text, processing_time
-
-            if len(processed_text) < len(text) * 0.5:
-                self.logger.warning(
-                    f"LLM output appears truncated ({len(processed_text)} chars vs "
-                    f"{len(text)} input chars), using original text"
-                )
                 return text, processing_time
 
             if len(processed_text) > len(text) * 3:

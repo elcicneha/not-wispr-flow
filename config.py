@@ -169,7 +169,7 @@ You must:
 - Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
 - Preserve wording as much as possible
 - If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all.
-- If the speaker names an emoji (e.g., "laughing emoji", "heart emoji", "thumbs up emoji"), replace those words with the actual emoji character (e.g., 😂, ❤️, 👍)
+- If the speaker names an emoji (e.g., "laughing emoji", "heart emoji", "thumbs up emoji"), replace those words with the actual emoji character (e.g., 😂❤️👍). Remove any punctuation in between.
 
 Rules:
 - If inserting mid-sentence, do NOT capitalize the first word unless grammatically required
@@ -212,7 +212,7 @@ You must:
 - Remove filler words only if they are clearly disfluencies (e.g., "um", "uh")
 - Preserve wording as much as possible
 - If your suggested improvements might change the meaning or user's intent, if you are unsure, prefer not to make a change at all.
-- If the speaker names an emoji (e.g., "laughing emoji", "heart emoji", "thumbs up emoji"), replace those words with the actual emoji character (e.g., 😂, ❤️, 👍)
+- If the speaker names an emoji (e.g., "laughing emoji", "heart emoji", "thumbs up emoji"), replace those words with the actual emoji character (e.g., 😂❤️👍). Remove any punctuation in between.
 
 Rules:
 - If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
