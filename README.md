@@ -2,6 +2,8 @@
 
 ![Social Preview](icons/social%20preview%20card.png)
 
+![Demo](icons/NotWisprFlowDemo.gif)
+
 Free, offline voice-to-text for **macOS**. Hold a key, speak, release — your words appear wherever your cursor is. Runs as a menu bar app, works system-wide in any app.
 
 Everything runs on your machine by default. No cloud, no subscription, no data leaving your computer. Uses OpenAI's Whisper model through Apple's MLX framework, running on your Mac's GPU.
