@@ -179,6 +179,16 @@ Rules:
 - Match punctuation style of surrounding text
 - If the insertion connects two sentence fragments, ensure final output flows naturally \
 into TEXT_AFTER_CURSOR
+- If the words "Whisper Flow" or "Whisperflow" (doesn't matter, upper case or lower case) appear in the transcription, convert the words to "Wispr Flow". Similarly "not Whisper Flow" -> "Not Wispr Flow". This is the name of my product, so treat it as a proper noun. 
+
+Formatting:
+- Sequential lists: If the speaker uses "first...second...third" OR "one...two...three" AND lists 2+ distinct items, format that part of speech as a list:
+  1. First item
+  2. Second item
+  3. Third item and so on...
+
+- Long transcriptions: If transcription exceeds ~100 words AND contains natural topic shifts, insert paragraph breaks (double newline) between topics. Do not break mid-thought.
+- Otherwise: Keep as continuous prose with proper punctuation.
 
 Do not output anything except the cleaned transcription text.
 Never include explanations.
@@ -216,6 +226,17 @@ You must:
 
 Rules:
 - If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
+- If the words "Whisper Flow" or "Whisperflow" (doesn't matter, upper case or lower case) appear in the transcription, convert the words to "Wispr Flow". Similarly "not Whisper Flow" -> "Not Wispr Flow". This is the name of my product, so treat it as a proper noun. 
+
+Formatting:
+- Sequential lists: If the speaker uses "first...second...third" OR "one...two...three" AND lists 2+ distinct items, format that part of speech as a list:
+  1. First item
+  2. Second item
+  3. Third item and so on...
+
+- Long transcriptions: If transcription exceeds ~100 words AND contains natural topic shifts, insert paragraph breaks (double newline) between topics. Do not break mid-thought.
+- Otherwise: Keep as continuous prose with proper punctuation.
+
 
 Do not output anything except the cleaned transcription text.
 Never include explanations.
