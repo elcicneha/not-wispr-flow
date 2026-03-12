@@ -48,7 +48,7 @@ from AppKit import (
     NSScrollView, NSTextView, NSPanel, NSButton, NSTextField,
     NSBezelStyleRounded, NSFont, NSColor,
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
-    NSBackingStoreBuffered, NSModalResponseOK, NSModalResponseCancel,
+    NSBackingStoreBuffered,
     NSLineBreakByWordWrapping,
 )
 from Foundation import NSMakeRect
@@ -1274,6 +1274,17 @@ class _PromptPanelController(NSObject):
     _sections = None
     _cancel_btn = None
     _save_btn = None
+    _should_save = False
+
+    def doSave_(self, sender):
+        """Save button: set flag and stop modal."""
+        self._should_save = True
+        NSApplication.sharedApplication().stopModal()
+
+    def doCancel_(self, sender):
+        """Cancel button: stop modal without saving."""
+        self._should_save = False
+        NSApplication.sharedApplication().stopModal()
 
     def toggleSection_(self, sender):
         """Toggle expand/collapse of a system prompt section."""
@@ -1593,24 +1604,22 @@ class MenuDelegate(NSObject):
         content.addSubview_(save_btn)
         ctrl._save_btn = save_btn
 
-        # Wire save/cancel to stop modal
-        app = NSApplication.sharedApplication()
-        save_btn.setTarget_(app)
-        save_btn.setAction_(objc.selector(None, selector=b"stopModalWithCode:", signature=b"v@:q"))
-        save_btn.setTag_(NSModalResponseOK)
-        cancel_btn.setTarget_(app)
-        cancel_btn.setAction_(objc.selector(None, selector=b"stopModalWithCode:", signature=b"v@:q"))
-        cancel_btn.setTag_(NSModalResponseCancel)
+        # Wire save/cancel to controller methods
+        save_btn.setTarget_(ctrl)
+        save_btn.setAction_("doSave:")
+        cancel_btn.setTarget_(ctrl)
+        cancel_btn.setAction_("doCancel:")
 
         # Layout, center, and show
         ctrl._relayout(animate=False)
         panel.center()
         panel.makeFirstResponder_(pp_tv)
 
-        result = app.runModalForWindow_(panel)
+        app = NSApplication.sharedApplication()
+        app.runModalForWindow_(panel)
         panel.orderOut_(None)
 
-        if result == NSModalResponseOK:
+        if ctrl._should_save:
             # Save personal prompt
             new_personal = pp_tv.string()
             if state.llm_processor:
