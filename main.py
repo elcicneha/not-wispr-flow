@@ -12,9 +12,23 @@ Uses mlx-whisper for offline speech-to-text transcription (GPU-accelerated on Ap
 import sys
 import os
 
-# Fix SSL certificates for py2app bundle — must run before any network imports
+# Fix SSL certificates for py2app bundle — must run before any network imports.
+# Inside py2app, certifi.where() can return the system Python path instead of the
+# bundle path, and OpenSSL's compiled-in default cert path doesn't exist either.
+# Monkey-patching ssl.create_default_context to pass cafile explicitly bypasses
+# all default path lookups.
+import ssl
 import certifi
-os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+_cert_path = certifi.where()
+if not os.path.exists(_cert_path):
+    # certifi.where() returned wrong path — find cacert.pem relative to module location
+    _alt = os.path.join(os.path.dirname(certifi.__file__), 'cacert.pem')
+    if os.path.exists(_alt):
+        _cert_path = _alt
+_orig_create_default_context = ssl.create_default_context
+def _create_default_context(purpose=ssl.Purpose.SERVER_AUTH, *, cafile=None, capath=None, cadata=None):
+    return _orig_create_default_context(purpose, cafile=cafile or _cert_path, capath=capath, cadata=cadata)
+ssl.create_default_context = _create_default_context
 
 import time
 import threading
