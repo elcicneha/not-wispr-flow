@@ -244,6 +244,9 @@ class AppState:
         self.llm_prompt = load_preference("llm_prompt", LLM_PROMPT)
 
 
+        # Model loading state (True while speech model is being loaded/downloaded)
+        self.is_loading_model = False
+
         # Transcription state tracking
         self.is_transcribing = False     # True when transcription thread is running
         self.transcription_start_time = None  # When transcription started (for hang detection)
@@ -420,6 +423,46 @@ def update_menu_bar_icon(state_name):
     _icon_manager.update_state(state_name)
 
 
+# Menu delegate reference — set by main() after setup_menu_bar()
+_menu_delegate = None
+
+
+class _StatusUpdater(NSObject):
+    """NSObject subclass for dispatching status menu item updates to the main thread."""
+
+    def setLoading_(self, _):
+        if _menu_delegate:
+            _menu_delegate.status_item.setTitle_("Loading speech model\u2026")
+            if _menu_delegate.hideable_items:
+                for item in _menu_delegate.hideable_items:
+                    item.setHidden_(True)
+
+    def setReady_(self, _):
+        if _menu_delegate:
+            _menu_delegate.status_item.setTitle_("Ready")
+            if _menu_delegate.hideable_items:
+                for item in _menu_delegate.hideable_items:
+                    item.setHidden_(False)
+
+_status_updater = _StatusUpdater.alloc().init()
+
+
+def _on_status_change(event, value):
+    """Status callback for TranscriptionManager. Thread-safe."""
+    if event == "loading_model":
+        if value:
+            state.is_loading_model = True
+            update_menu_bar_icon('transcribing')
+            _status_updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+                'setLoading:', None, False
+            )
+        else:
+            state.is_loading_model = False
+            if not state.is_recording and not state.is_transcribing:
+                update_menu_bar_icon('idle')
+            _status_updater.performSelectorOnMainThread_withObject_waitUntilDone_(
+                'setReady:', None, False
+            )
 
 
 # ============================================================================
@@ -935,6 +978,10 @@ def on_press(key):
       transcription hung (>60s)           → clear flag so user can record again
     """
     current_time = time.time() * 1000  # Convert to milliseconds
+
+    # Ignore recording hotkeys while model is loading
+    if state.is_loading_model:
+        return
 
     try:
         with state.lock:
@@ -1453,6 +1500,8 @@ class MenuDelegate(NSObject):
     paste_mode_item = None
     llm_model_items = None   # dict: model_name -> NSMenuItem
     personal_prompt_item = None
+    status_item = None       # always-visible status line ("Ready" / "Loading…" / "Downloading… X%")
+    hideable_items = None    # items hidden during model loading
 
     def retypeLast_(self, sender):
         """Type last transcription character-by-character in a background thread."""
@@ -1714,6 +1763,19 @@ def setup_menu_bar(shutdown_event):
     menu = NSMenu.alloc().init()
     menu.setMinimumWidth_(180)  # Set minimum width for the menu dropdown
 
+    # Status — always visible, shows current state
+    status_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Loading speech model\u2026", None, ""
+    )
+    status_menu_item.setEnabled_(False)
+    menu.addItem_(status_menu_item)
+    delegate.status_item = status_menu_item
+
+    menu.addItem_(NSMenuItem.separatorItem())
+
+    # Items hidden during model loading (collected below)
+    hideable_items = []
+
     # Retype Last — grayed out when no transcription available
     retype_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         "Retype last transcript", "retypeLast:", "c"
@@ -1721,8 +1783,11 @@ def setup_menu_bar(shutdown_event):
     retype_item.setKeyEquivalentModifierMask_(NSEventModifierFlagControl | NSEventModifierFlagCommand)
     retype_item.setTarget_(delegate)
     menu.addItem_(retype_item)
+    hideable_items.append(retype_item)
 
-    menu.addItem_(NSMenuItem.separatorItem())
+    sep1 = NSMenuItem.separatorItem()
+    menu.addItem_(sep1)
+    hideable_items.append(sep1)
 
     # Paste Mode toggle — checked by default (paste mode ON)
     paste_mode_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -1732,6 +1797,7 @@ def setup_menu_bar(shutdown_event):
     paste_mode_item.setState_(NSOffState if state.use_type_mode else NSOnState)
     delegate.paste_mode_item = paste_mode_item
     menu.addItem_(paste_mode_item)
+    hideable_items.append(paste_mode_item)
 
     # LLM Model submenu — built from LLM_MODELS in config.py
     llm_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -1762,6 +1828,7 @@ def setup_menu_bar(shutdown_event):
     llm_menu_item.setSubmenu_(llm_submenu)
     delegate.llm_model_items = llm_model_items
     menu.addItem_(llm_menu_item)
+    hideable_items.append(llm_menu_item)
 
     # Personal Prompt — editable additional instructions for LLM
     has_personal = bool(state.llm_processor and state.llm_processor._personal_prompt)
@@ -1772,8 +1839,11 @@ def setup_menu_bar(shutdown_event):
     personal_prompt_item.setTarget_(delegate)
     delegate.personal_prompt_item = personal_prompt_item
     menu.addItem_(personal_prompt_item)
+    hideable_items.append(personal_prompt_item)
 
-    menu.addItem_(NSMenuItem.separatorItem())
+    sep2 = NSMenuItem.separatorItem()
+    menu.addItem_(sep2)
+    hideable_items.append(sep2)
 
     # Open Logs
     logs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
@@ -1790,6 +1860,8 @@ def setup_menu_bar(shutdown_event):
     )
     quit_item.setTarget_(delegate)
     menu.addItem_(quit_item)
+
+    delegate.hideable_items = hideable_items
 
     status_item.setMenu_(menu)
 
@@ -1865,6 +1937,7 @@ def main():
     check_accessibility_permission()
 
     # Initialize transcription manager (handles Groq API + local MLX Whisper + VAD)
+    # Note: does NOT load the model yet — that happens in background after menu bar is up
     state.transcription_manager = TranscriptionManager(
         mode=TRANSCRIPTION_MODE,
         groq_api_key=GROQ_API_KEY,
@@ -1872,16 +1945,8 @@ def main():
         whisper_model=WHISPER_MODEL,
         language=LANGUAGE,
         logger=logger,
+        status_callback=_on_status_change,
     )
-    try:
-        state.transcription_manager.initialize()
-    except Exception as e:
-        logger.error(f"Failed to initialize transcription: {e}", exc_info=True)
-        TranscriptionManager._show_error_dialog(
-            "Could not start Not Wispr Flow.\n\n"
-            "Check the logs for details."
-        )
-        sys.exit(0)
 
     # Initialize LLM processor (model may be overridden by saved preference)
     state.llm_processor = LLMProcessor(
@@ -1893,10 +1958,6 @@ def main():
 
     # Initialize keyboard controller
     state.keyboard_controller = Controller()
-
-    # Log startup summary
-    llm_display = LLM_MODELS.get(state.llm_model, {}).get("display", state.llm_model)
-    logger.info(f"Ready | Mode={TRANSCRIPTION_MODE}, LLM={llm_display}, Debug={'ON' if DEBUG else 'OFF'}")
 
     # Shutdown via flag — signal handler only sets the flag, no I/O
     shutdown_event = threading.Event()
@@ -1946,8 +2007,31 @@ def main():
     )
     health_thread.start()
 
-    # Set up menu bar icon (must be on main thread)
+    # Set up menu bar icon (must be on main thread — appears immediately)
+    global _menu_delegate
     _menu_refs = setup_menu_bar(shutdown_event)
+    _menu_delegate = _menu_refs[1]  # MenuDelegate instance
+
+    # Initialize transcription in background (model loading shows processing animation)
+    def _init_transcription():
+        try:
+            state.transcription_manager.initialize()
+        except Exception as e:
+            logger.error(f"Failed to initialize transcription: {e}", exc_info=True)
+            TranscriptionManager._show_error_dialog(
+                "Could not start Not Wispr Flow.\n\n"
+                "Check the logs for details."
+            )
+            NSApplication.sharedApplication().performSelectorOnMainThread_withObject_waitUntilDone_(
+                'terminate:', None, False
+            )
+            return
+
+        # Log startup summary
+        llm_display = LLM_MODELS.get(state.llm_model, {}).get("display", state.llm_model)
+        logger.info(f"Ready | Mode={TRANSCRIPTION_MODE}, LLM={llm_display}, Debug={'ON' if DEBUG else 'OFF'}")
+
+    threading.Thread(target=_init_transcription, daemon=True).start()
 
     # Run macOS event loop (blocks until quit)
     NSApplication.sharedApplication().run()

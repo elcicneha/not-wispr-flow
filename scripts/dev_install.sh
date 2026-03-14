@@ -21,6 +21,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_INSTALL_PATH="/Applications/Not Wispr Flow.app"
 PYTHON_CODE_PATH="$APP_INSTALL_PATH/Contents/Resources"
+VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
+
+# Detect Python version for zip file name
+PYTHON_VERSION=$("$VENV_PYTHON" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')
+PYTHON_ZIP="$PYTHON_CODE_PATH/lib/python${PYTHON_VERSION}.zip"
+
+# Project Python files (everything except setup.py)
+PROJECT_FILES=(config.py transcription.py llm_processor.py post_processing.py media_control.py)
 
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -42,6 +50,11 @@ check_app_exists() {
         log_info "Run full install first: ./scripts/install_service.sh"
         exit 1
     fi
+    if [ ! -f "$PYTHON_ZIP" ]; then
+        log_error "Python zip not found at: $PYTHON_ZIP"
+        log_info "Run full install first: ./scripts/install_service.sh"
+        exit 1
+    fi
     log_success "Found app bundle"
 }
 
@@ -57,33 +70,72 @@ stop_app() {
     fi
 }
 
-# Copy Python files
+# Update Python files
 update_python_files() {
     log_info "Updating Python files..."
 
-    # Copy main.py
+    # main.py is loaded directly from Resources by __boot__.py (not from the zip)
     if [ -f "$PROJECT_DIR/main.py" ]; then
         cp "$PROJECT_DIR/main.py" "$PYTHON_CODE_PATH/main.py"
-        log_success "Updated main.py"
+        log_success "Updated main.py (Resources)"
     fi
 
-    # Copy config.py
-    if [ -f "$PROJECT_DIR/config.py" ]; then
-        cp "$PROJECT_DIR/config.py" "$PYTHON_CODE_PATH/config.py"
-        log_success "Updated config.py"
-    fi
+    # All other project .py files are compiled to .pyc inside the python zip.
+    # We need to compile them and replace the entries in the zip.
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local updated=0
 
-    # Copy any other .py files in root
-    for pyfile in "$PROJECT_DIR"/*.py; do
-        if [ -f "$pyfile" ]; then
-            filename=$(basename "$pyfile")
-            # Skip setup.py
-            if [ "$filename" != "setup.py" ]; then
-                cp "$pyfile" "$PYTHON_CODE_PATH/$filename"
-                log_success "Updated $filename"
-            fi
+    for pyfile in "${PROJECT_FILES[@]}"; do
+        if [ -f "$PROJECT_DIR/$pyfile" ]; then
+            local basename="${pyfile%.py}"
+            local pyc_name="${basename}.pyc"
+
+            # Compile .py to .pyc (optimize=1 matches py2app build setting)
+            "$VENV_PYTHON" -O -c "
+import py_compile, sys, os, importlib.util
+src = sys.argv[1]
+dst = sys.argv[2]
+py_compile.compile(src, dst, doraise=True, optimize=1)
+" "$PROJECT_DIR/$pyfile" "$tmpdir/$pyc_name"
+
+            updated=$((updated + 1))
+            log_success "Compiled $pyfile"
         fi
     done
+
+    if [ "$updated" -gt 0 ]; then
+        # Update the zip file with new .pyc files
+        "$VENV_PYTHON" -c "
+import zipfile, sys, os
+
+zip_path = sys.argv[1]
+tmpdir = sys.argv[2]
+pyc_files = [f for f in os.listdir(tmpdir) if f.endswith('.pyc')]
+
+# Read existing zip, write new one with updated entries
+tmp_zip = zip_path + '.tmp'
+with zipfile.ZipFile(zip_path, 'r') as zin:
+    with zipfile.ZipFile(tmp_zip, 'w', compression=zin.compression) as zout:
+        for item in zin.infolist():
+            if item.filename in pyc_files:
+                # Replace with our new compiled version
+                with open(os.path.join(tmpdir, item.filename), 'rb') as f:
+                    zout.writestr(item, f.read())
+            else:
+                zout.writestr(item, zin.read(item.filename))
+
+os.replace(tmp_zip, zip_path)
+" "$PYTHON_ZIP" "$tmpdir"
+
+        log_success "Updated $updated modules in python${PYTHON_VERSION}.zip"
+    fi
+
+    # Cleanup
+    rm -rf "$tmpdir"
+
+    # Clear any __pycache__ that might have stale bytecode
+    find "$PYTHON_CODE_PATH" -maxdepth 1 -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 }
 
 # Start app
@@ -100,7 +152,7 @@ print_summary() {
     echo -e "${GREEN}Development update complete!${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "Changes applied in ~1 second (vs ~30+ seconds for full rebuild)"
+    echo "Updated: main.py (direct) + ${#PROJECT_FILES[@]} modules (in zip)"
     echo ""
     echo -e "${YELLOW}Note:${NC} This only updates .py files. For dependency changes, run:"
     echo "  ./scripts/install_service.sh"

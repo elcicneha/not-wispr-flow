@@ -247,9 +247,10 @@ class TranscriptionManager:
         "auto"    - Try Groq first, fall back to local MLX
     """
 
-    def __init__(self, mode, groq_api_key, groq_model, whisper_model, language, logger):
+    def __init__(self, mode, groq_api_key, groq_model, whisper_model, language, logger, status_callback=None):
         self.mode = mode
         self.logger = logger
+        self._status_callback = status_callback  # callable(event, value) for UI updates
 
         # VAD (always local, always loaded — only ~50MB)
         self.vad_model, self.vad_utils = _initialize_vad(logger)
@@ -285,6 +286,8 @@ class TranscriptionManager:
                 self.logger.debug("Auto mode: Groq API key found, will use Groq with local fallback")
                 # Don't load model yet - will load on-demand if needed
                 self._start_connectivity_monitor()
+                # Pre-download model files in background so they're cached when needed
+                threading.Thread(target=self._predownload_model, daemon=True).start()
             else:
                 self.logger.debug("Auto mode: No Groq API key configured, using local transcription only")
                 self._load_local_model()
@@ -434,11 +437,23 @@ class TranscriptionManager:
         )
         return {"text": result.text}
 
+    def _predownload_model(self):
+        """Download model files to HuggingFace cache without loading into memory."""
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(self._whisper_model_name)
+            self.logger.info(f"Speech model pre-downloaded: {self._whisper_model_name}")
+        except Exception as e:
+            self.logger.debug(f"Model pre-download skipped: {e}")
+
     def _load_local_model(self):
         """Load MLX Whisper model (blocks until ready)."""
         with self._model_lock:
             if self._local_transcribe_fn is not None:
                 return  # Already loaded
+
+            if self._status_callback:
+                self._status_callback("loading_model", True)
 
             self._worker_stop = threading.Event()
             try:
@@ -453,6 +468,9 @@ class TranscriptionManager:
                     "Check the logs for details."
                 )
                 sys.exit(0)
+            finally:
+                if self._status_callback:
+                    self._status_callback("loading_model", False)
 
     def _unload_local_model(self):
         """Unload MLX Whisper to free ~2.3GB RAM."""
