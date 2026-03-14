@@ -13,20 +13,24 @@ import sys
 import os
 
 # Fix SSL certificates for py2app bundle — must run before any network imports.
-# Inside py2app, certifi.where() can return the system Python path instead of the
-# bundle path, and OpenSSL's compiled-in default cert path doesn't exist either.
-# Monkey-patching ssl.create_default_context to pass cafile explicitly bypasses
-# all default path lookups.
+# certifi.where() can return invalid paths in py2app bundles (resolves to system
+# Python path instead of bundle path). httpx passes certifi.where() as cafile to
+# ssl.create_default_context(), which then fails with FileNotFoundError.
 import ssl
 import certifi
 _cert_path = certifi.where()
 if not os.path.exists(_cert_path):
-    # certifi.where() returned wrong path — find cacert.pem relative to module location
     _alt = os.path.join(os.path.dirname(certifi.__file__), 'cacert.pem')
     if os.path.exists(_alt):
         _cert_path = _alt
+# Set SSL_CERT_FILE so httpx uses it directly (bypasses certifi.where() entirely)
+if os.path.exists(_cert_path):
+    os.environ['SSL_CERT_FILE'] = _cert_path
+# Safety net: patch ssl.create_default_context to validate cafile paths
 _orig_create_default_context = ssl.create_default_context
 def _create_default_context(purpose=ssl.Purpose.SERVER_AUTH, *, cafile=None, capath=None, cadata=None):
+    if cafile and not os.path.exists(cafile):
+        cafile = _cert_path
     return _orig_create_default_context(purpose, cafile=cafile or _cert_path, capath=capath, cadata=cadata)
 ssl.create_default_context = _create_default_context
 
