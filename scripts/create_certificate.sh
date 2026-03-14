@@ -46,7 +46,7 @@ echo ""
 read -s -p "Enter your macOS login password (to allow passwordless code signing): " KC_PASS
 echo ""
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
-  -s -k "$KC_PASS" ~/Library/Keychains/login.keychain-db
+  -s -k "$KC_PASS" ~/Library/Keychains/login.keychain-db > /dev/null
 unset KC_PASS
 
 rm -f /tmp/cert.pem /tmp/key.pem /tmp/cert.p12 /tmp/cert_config.conf
