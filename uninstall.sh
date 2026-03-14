@@ -13,8 +13,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Paths
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLIST_FILE="$HOME/Library/LaunchAgents/com.notwisprflow.dictation.plist"
 APP_INSTALL_PATH="/Applications/Not Wispr Flow.app"
 LOG_DIR="$HOME/Library/Logs/NotWisprFlow"
@@ -109,7 +108,7 @@ print_summary() {
     echo -e "${GREEN}Not Wispr Flow has been completely uninstalled${NC}"
     echo ""
     echo "To reinstall, run:"
-    echo "  ./scripts/install_service.sh"
+    echo "  ./install.sh"
     echo ""
 }
 

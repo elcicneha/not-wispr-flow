@@ -32,8 +32,12 @@ rm -rf build dist && python3 setup.py py2app
 ./scripts/install_service.sh
 # Use this for: first install, dependency changes, or major changes
 
+# One-step installer (for end users or first-time setup)
+./install.sh
+# Handles everything: Python, venv, certificate, build, install
+
 # Uninstall (removes app, logs, build artifacts)
-./scripts/uninstall_service.sh
+./uninstall.sh
 
 # Check service status
 ./scripts/check_status.sh
@@ -57,7 +61,7 @@ There are no automated tests. Manual testing requires running the app and dictat
 3. **Audio Pipeline** — `soundcard` recorder → numpy buffer (lock-free deque) → `TranscriptionManager.contains_speech()` → `TranscriptionManager.transcribe()` → clipboard paste (default)
 4. **Smart Model Management** — In auto mode, a background connectivity monitor unloads the local model after 60s stable internet (frees ~2.3GB RAM) and pre-loads it immediately when connectivity drops
 5. **Keyboard Handling** — `pynput.Listener` with `on_press`/`on_release` callbacks implementing a state machine with stuck-state recovery
-6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager`, plus `MenuDelegate` for Retype Last, Paste Mode toggle, LLM Model picker submenu, Prompts editor, Open Logs, and Quit
+6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager`, plus `MenuDelegate` for Retype Last (Ctrl+Cmd+C), Paste Mode toggle, LLM Model picker submenu, Prompts editor, Open Logs, and Quit
 7. **LLM Processor** — `LLMProcessor` in `llm_processor.py` dispatches to Gemini or Groq providers based on `LLM_MODELS` config. Preferences (selected model, prompt) persist in `~/.config/notwisprflow/preferences.json`
 8. **Media Control** — `media_control.py` uses `MRMediaRemoteSendCommand` from macOS private `MediaRemote.framework` (loaded via `objc.loadBundleFunctions`) to send PAUSE/PLAY commands to whatever app is the system Now Playing source. Detects playing state via macOS power assertions (`pmset -g assertions` checking for "Playing audio") since MediaRemote query APIs are broken for browser media on macOS Sequoia. Runs async in background thread from `start_recording()`; resumes in `_transcription_wrapper()` finally block
 9. **Cursor Context** — `get_cursor_context()` reads text around cursor via macOS Accessibility APIs for smart spacing
@@ -128,6 +132,11 @@ CONTEXT_CHARS = 200              # Context window for cursor context
 
 `HOTKEY_KEYS` is a **set** — pynput may report `Key.ctrl`, `Key.ctrl_r`, or `Key.ctrl_l` depending on macOS version/keyboard. The `is_hotkey(key)` function checks membership.
 
+**API keys** can also be stored as files instead of in config.py:
+- `~/.config/notwisprflow/api_key` — Groq API key
+- `~/.config/notwisprflow/gemini_api_key` — Gemini API key
+- `~/.config/notwisprflow/preferences.json` — Runtime state (selected LLM model, prompt preset)
+
 ## Important Gotchas
 
 - **macOS permissions** must be granted to the **app bundle** ("Not Wispr Flow"), not Terminal/Python: Microphone + Accessibility + Input Monitoring (Privacy & Security)
@@ -171,3 +180,19 @@ Insert transformations in `post_process()` in `post_processing.py` which receive
 
 ### Changing text insertion behavior
 Set the default mode via `USE_TYPE_MODE` in config.py (False = clipboard paste, True = character-by-character typing). Users can toggle at runtime via the "Paste Mode" menu bar item. Modify `insert_text()` to change the implementation details.
+
+## Design Decisions Log (MANDATORY)
+
+**After completing any task**, you MUST append a new entry to `DESIGN_DECISIONS.md`. This is not optional — treat it as the final step of every task before considering the work done.
+
+Each entry should include:
+
+1. **What was done** — Brief summary of the change/feature/fix implemented
+2. **What was explicitly NOT done and why** — Scope boundaries, features deliberately left out, simplifications chosen
+3. **Alternatives considered** — Other approaches that were evaluated
+4. **What was tried and didn't work** — Failed attempts, dead ends, things that looked promising but broke (include specifics: error messages, why it failed)
+5. **What worked and why** — The chosen approach and the reasoning behind it
+
+Follow the existing format in the file: `## Section Title`, then `**Decision: ...**`, then bullet points with details, ending with `---`.
+
+Skip this step ONLY if the task was purely informational (answering a question, explaining code) with zero code changes.

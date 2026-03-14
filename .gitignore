@@ -44,5 +44,7 @@ LLM_IMPROVEMENTS_PHASE2.md
 build/
 dist/
 *.app
+.install.log
 
 create_menubar_icons.py
+icons/NotWisprFlowDemo.mp4

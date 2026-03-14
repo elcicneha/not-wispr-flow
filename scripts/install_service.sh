@@ -213,7 +213,7 @@ print_summary() {
     echo "Log files:"
     echo "  • Application: $LOG_DIR/notwisprflow.log"
     echo ""
-    echo "Uninstall: $SCRIPT_DIR/uninstall_service.sh"
+    echo "Uninstall: $PROJECT_DIR/uninstall.sh"
     echo ""
 }
 
