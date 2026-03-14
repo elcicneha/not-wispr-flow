@@ -84,6 +84,7 @@ OPTIONS = {
         'huggingface_hub',
         'tokenizers',
         'onnxruntime',        # ONNX runtime for VAD (replaces torch)
+        'certifi',            # CA certificates for SSL in bundled app
         'groq',               # Groq API client for cloud transcription
         'pydantic',           # Required by google-genai
         'ApplicationServices',

@@ -13,6 +13,7 @@ and TranscriptionManager.contains_speech().
 """
 
 import os
+import subprocess
 import sys
 import threading
 import numpy as np
@@ -357,6 +358,24 @@ class TranscriptionManager:
     # --- Private methods ---
 
     @staticmethod
+    def _show_error_dialog(message):
+        """Show a macOS error dialog via osascript. 'Open Logs' button opens the log file."""
+        log_path = os.path.expanduser("~/Library/Logs/NotWisprFlow/notwisprflow.log")
+        escaped = message.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '" & return & "')
+        script = (
+            f'set result to display dialog "{escaped}" '
+            f'with title "Not Wispr Flow" '
+            f'buttons {{"OK", "Open Logs"}} default button "OK" with icon note\n'
+            f'if button returned of result is "Open Logs" then\n'
+            f'    do shell script "open \\"{log_path}\\""\n'
+            f'end if'
+        )
+        try:
+            subprocess.run(["osascript", "-e", script], timeout=60)
+        except Exception:
+            pass
+
+    @staticmethod
     def _resolve_groq_key(config_key, logger):
         """Resolve Groq API key from config.py → env var → ~/.config/notwisprflow/api_key."""
         _KEY_FILE = os.path.expanduser("~/.config/notwisprflow/api_key")
@@ -428,13 +447,12 @@ class TranscriptionManager:
                     self._worker_stop, self.logger
                 )
             except Exception as e:
-                self.logger.error(f"FATAL ERROR: Failed to load Whisper model")
-                self.logger.error(f"Details: {e}")
-                self.logger.error("Please check your internet connection (first download) and try again.")
-                if self.mode == "offline":
-                    sys.exit(0)
-                else:
-                    raise
+                self.logger.error(f"Failed to load Whisper model: {e}", exc_info=True)
+                self._show_error_dialog(
+                    "Could not load the speech model.\n\n"
+                    "Check the logs for details."
+                )
+                sys.exit(0)
 
     def _unload_local_model(self):
         """Unload MLX Whisper to free ~2.3GB RAM."""

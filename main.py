@@ -10,6 +10,12 @@ Uses mlx-whisper for offline speech-to-text transcription (GPU-accelerated on Ap
 """
 
 import sys
+import os
+
+# Fix SSL certificates for py2app bundle — must run before any network imports
+import certifi
+os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+
 import time
 import threading
 import numpy as np
@@ -21,7 +27,6 @@ import logging.handlers
 from pathlib import Path
 import ctypes
 import fcntl
-import os
 import signal
 import atexit
 import subprocess
@@ -1850,7 +1855,15 @@ def main():
         language=LANGUAGE,
         logger=logger,
     )
-    state.transcription_manager.initialize()
+    try:
+        state.transcription_manager.initialize()
+    except Exception as e:
+        logger.error(f"Failed to initialize transcription: {e}", exc_info=True)
+        TranscriptionManager._show_error_dialog(
+            "Could not start Not Wispr Flow.\n\n"
+            "Check the logs for details."
+        )
+        sys.exit(0)
 
     # Initialize LLM processor (model may be overridden by saved preference)
     state.llm_processor = LLMProcessor(
