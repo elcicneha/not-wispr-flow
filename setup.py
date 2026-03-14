@@ -19,22 +19,22 @@ PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
 APP = ['main.py']
 DATA_FILES = [
     ('', [
-        'icons/menubar_idle.png',
-        'icons/menubar_idle@2x.png',
+        'resources/icons/menubar_idle.png',
+        'resources/icons/menubar_idle@2x.png',
         # Recording animation frames (3 frames, ping-pong: 1→2→3→2→1)
-        'icons/menubar_recording_1.png',
-        'icons/menubar_recording_1@2x.png',
-        'icons/menubar_recording_2.png',
-        'icons/menubar_recording_2@2x.png',
-        'icons/menubar_recording_3.png',
-        'icons/menubar_recording_3@2x.png',
+        'resources/icons/menubar_recording_1.png',
+        'resources/icons/menubar_recording_1@2x.png',
+        'resources/icons/menubar_recording_2.png',
+        'resources/icons/menubar_recording_2@2x.png',
+        'resources/icons/menubar_recording_3.png',
+        'resources/icons/menubar_recording_3@2x.png',
         # Processing animation frames (3 frames, loop: 1→2→3→1→2→3)
-        'icons/menubar_processing_1.png',
-        'icons/menubar_processing_1@2x.png',
-        'icons/menubar_processing_2.png',
-        'icons/menubar_processing_2@2x.png',
-        'icons/menubar_processing_3.png',
-        'icons/menubar_processing_3@2x.png'
+        'resources/icons/menubar_processing_1.png',
+        'resources/icons/menubar_processing_1@2x.png',
+        'resources/icons/menubar_processing_2.png',
+        'resources/icons/menubar_processing_2@2x.png',
+        'resources/icons/menubar_processing_3.png',
+        'resources/icons/menubar_processing_3@2x.png'
     ]),
     # Silero VAD ONNX model (bundled for offline speech detection)
     ('resources', ['resources/silero_vad.onnx']),
@@ -49,7 +49,7 @@ OPTIONS = {
     'argv_emulation': False,
 
     # App icon
-    'iconfile': 'icons/icon_1.icns',
+    'iconfile': 'resources/icons/icon_1.icns',
 
     # App metadata and permissions
     'plist': {
@@ -88,6 +88,7 @@ OPTIONS = {
         'groq',               # Groq API client for cloud transcription
         'pydantic',           # Required by google-genai
         'ApplicationServices',
+        'notwisprflow',       # App's own package (config, transcription, etc.)
     ],
 
     # Include specific compiled extensions

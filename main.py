@@ -79,15 +79,15 @@ from Foundation import NSMakeRect
 # ============================================================================
 # User Configuration - imported from config.py
 # ============================================================================
-from config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
+from notwisprflow.config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
                     TRANSCRIPTION_MODE, GROQ_MODEL, GROQ_API_KEY,
                     LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
                     LLM_PROMPT, USE_TYPE_MODE,
                     PAUSE_MEDIA_ON_RECORD, GEMINI_API_KEY)
-from transcription import TranscriptionManager
-from llm_processor import LLMProcessor, load_preference, save_preference
-from media_control import pause_media, resume_media
-from post_processing import post_process
+from notwisprflow.transcription import TranscriptionManager
+from notwisprflow.llm_processor import LLMProcessor, load_preference, save_preference
+from notwisprflow.media_control import pause_media, resume_media
+from notwisprflow.post_processing import post_process
 
 # ============================================================================
 # Logging Configuration
@@ -313,7 +313,7 @@ class MenuBarIconManager:
         if getattr(sys, 'frozen', False):
             base_path = os.path.join(os.path.dirname(sys.executable), '..', 'Resources')
         else:
-            base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icons')
+            base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', 'icons')
 
         icon_1x_path = os.path.join(base_path, f'{icon_name}.png')
         icon_2x_path = os.path.join(base_path, f'{icon_name}@2x.png')

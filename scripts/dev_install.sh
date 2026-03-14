@@ -27,8 +27,8 @@ VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
 PYTHON_VERSION=$("$VENV_PYTHON" -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')
 PYTHON_ZIP="$PYTHON_CODE_PATH/lib/python${PYTHON_VERSION}.zip"
 
-# Project Python files (everything except setup.py)
-PROJECT_FILES=(config.py transcription.py llm_processor.py post_processing.py media_control.py)
+# Project Python files in notwisprflow/ package
+PACKAGE_FILES=(config.py transcription.py llm_processor.py post_processing.py media_control.py __init__.py)
 
 # Functions
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
@@ -80,16 +80,17 @@ update_python_files() {
         log_success "Updated main.py (Resources)"
     fi
 
-    # All other project .py files are compiled to .pyc inside the python zip.
+    # Package .py files are compiled to .pyc inside the python zip under notwisprflow/.
     # We need to compile them and replace the entries in the zip.
     local tmpdir
     tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/notwisprflow"
     local updated=0
 
-    for pyfile in "${PROJECT_FILES[@]}"; do
-        if [ -f "$PROJECT_DIR/$pyfile" ]; then
+    for pyfile in "${PACKAGE_FILES[@]}"; do
+        if [ -f "$PROJECT_DIR/notwisprflow/$pyfile" ]; then
             local basename="${pyfile%.py}"
-            local pyc_name="${basename}.pyc"
+            local pyc_name="notwisprflow/${basename}.pyc"
 
             # Compile .py to .pyc (optimize=1 matches py2app build setting)
             "$VENV_PYTHON" -O -c "
@@ -97,10 +98,10 @@ import py_compile, sys, os, importlib.util
 src = sys.argv[1]
 dst = sys.argv[2]
 py_compile.compile(src, dst, doraise=True, optimize=1)
-" "$PROJECT_DIR/$pyfile" "$tmpdir/$pyc_name"
+" "$PROJECT_DIR/notwisprflow/$pyfile" "$tmpdir/$pyc_name"
 
             updated=$((updated + 1))
-            log_success "Compiled $pyfile"
+            log_success "Compiled notwisprflow/$pyfile"
         fi
     done
 
@@ -111,7 +112,13 @@ import zipfile, sys, os
 
 zip_path = sys.argv[1]
 tmpdir = sys.argv[2]
-pyc_files = [f for f in os.listdir(tmpdir) if f.endswith('.pyc')]
+
+# Collect all .pyc files under notwisprflow/
+pyc_files = {}
+pkg_dir = os.path.join(tmpdir, 'notwisprflow')
+for f in os.listdir(pkg_dir):
+    if f.endswith('.pyc'):
+        pyc_files['notwisprflow/' + f] = os.path.join(pkg_dir, f)
 
 # Read existing zip, write new one with updated entries
 tmp_zip = zip_path + '.tmp'
@@ -120,7 +127,7 @@ with zipfile.ZipFile(zip_path, 'r') as zin:
         for item in zin.infolist():
             if item.filename in pyc_files:
                 # Replace with our new compiled version
-                with open(os.path.join(tmpdir, item.filename), 'rb') as f:
+                with open(pyc_files[item.filename], 'rb') as f:
                     zout.writestr(item, f.read())
             else:
                 zout.writestr(item, zin.read(item.filename))
@@ -152,7 +159,7 @@ print_summary() {
     echo -e "${GREEN}Development update complete!${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "Updated: main.py (direct) + ${#PROJECT_FILES[@]} modules (in zip)"
+    echo "Updated: main.py (direct) + ${#PACKAGE_FILES[@]} modules (in zip)"
     echo ""
     echo -e "${YELLOW}Note:${NC} This only updates .py files. For dependency changes, run:"
     echo "  ./scripts/install_service.sh"

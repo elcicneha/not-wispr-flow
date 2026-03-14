@@ -138,7 +138,7 @@ def _initialize_vad(logger):
             bundle_dir = os.path.dirname(sys.executable)
             model_path = os.path.join(bundle_dir, '..', 'Resources', 'resources', 'silero_vad.onnx')
         else:
-            model_path = os.path.join(os.path.dirname(__file__), 'resources', 'silero_vad.onnx')
+            model_path = os.path.join(os.path.dirname(__file__), '..', 'resources', 'silero_vad.onnx')
 
         model_path = os.path.abspath(model_path)
 

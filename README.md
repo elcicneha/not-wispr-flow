@@ -1,8 +1,8 @@
 # Not Wispr Flow
 
-![Social Preview](icons/social%20preview%20card.png)
+![Social Preview](resources/icons/social%20preview%20card.png)
 
-![Demo](icons/NotWisprFlowDemo.gif)
+![Demo](resources/icons/NotWisprFlowDemo.gif)
 
 Free, offline voice-to-text for **macOS**. Hold a key, speak, release — your words appear wherever your cursor is. Runs as a menu bar app, works system-wide in any app.
 
@@ -117,7 +117,7 @@ This is the main API key. It does two things:
 
    **Option A — Paste in config.py** (quick and simple, good for personal use)
 
-   Open [config.py](config.py), find `GROQ_API_KEY`, paste your key there.
+   Open [config.py](notwisprflow/config.py), find `GROQ_API_KEY`, paste your key there.
 
    **Option B — Save to a file** (keeps your key separate from the code, safer if you share or push your code)
    ```bash
@@ -127,7 +127,7 @@ This is the main API key. It does two things:
 
 4. Restart the app
 
-**Don't want online transcription at all?** Set `TRANSCRIPTION_MODE = "offline"` in [config.py](config.py).
+**Don't want online transcription at all?** Set `TRANSCRIPTION_MODE = "offline"` in [config.py](notwisprflow/config.py).
 
 ### Gemini API Key — Better LLM (Optional)
 
@@ -138,7 +138,7 @@ If you want higher quality text cleanup, you can add a Gemini key. Gemini models
 
    **Option A — Paste in config.py** (quick and simple, good for personal use)
 
-   Open [config.py](config.py), find `GEMINI_API_KEY`, paste your key there.
+   Open [config.py](notwisprflow/config.py), find `GEMINI_API_KEY`, paste your key there.
 
    **Option B — Save to a file** (keeps your key separate from the code, safer if you share or push your code)
    ```bash
@@ -147,7 +147,7 @@ If you want higher quality text cleanup, you can add a Gemini key. Gemini models
    ```
 
 3. Restart the app
-4. Switch to a Gemini model: in [config.py](config.py), set `LLM_MODEL` to `"gemini-2.5-flash"` or `"gemini-2.5-pro"` (or change it from the menu bar under LLM Model)
+4. Switch to a Gemini model: in [config.py](notwisprflow/config.py), set `LLM_MODEL` to `"gemini-2.5-flash"` or `"gemini-2.5-pro"` (or change it from the menu bar under LLM Model)
 
 LLM only runs when using online transcription (Groq). It's automatically skipped during offline/local transcription.
 
@@ -170,7 +170,7 @@ The menu bar icon shows the app state: idle, recording (animated), or processing
 
 ## Customization
 
-Want to change things up? Edit [config.py](config.py) in any text editor:
+Want to change things up? Edit [config.py](notwisprflow/config.py) in any text editor:
 
 **Whisper models:**
 - `whisper-large-v3` (default in online mode) — Most accurate
@@ -203,7 +203,7 @@ Want to change things up? Edit [config.py](config.py) in any text editor:
 |---------|-----|
 | Hotkey won't work | Check all 3 permissions are enabled (Microphone, Accessibility, Input Monitoring) |
 | No text appears | Make sure Accessibility permission is on |
-| Text is wrong/gibberish | Try talking louder, or switch to larger model in [config.py](config.py) |
+| Text is wrong/gibberish | Try talking louder, or switch to larger model in [config.py](notwisprflow/config.py) |
 | Stopped working after rebuild | Run `./scripts/create_certificate.sh` first, then rebuild |
 | Need logs? | `~/Library/Logs/NotWisprFlow/notwisprflow.log` (Cmd+Shift+G in Finder) |
 | LLM not running? | Make sure you have the right API key set up and `TRANSCRIPTION_MODE` is not `"offline"` |

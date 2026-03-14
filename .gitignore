@@ -47,4 +47,4 @@ dist/
 .install.log
 
 create_menubar_icons.py
-icons/NotWisprFlowDemo.mp4
+resources/icons/NotWisprFlowDemo.mp4

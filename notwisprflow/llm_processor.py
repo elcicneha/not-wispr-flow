@@ -14,7 +14,7 @@ import os
 import time
 from typing import Optional, Tuple
 
-from config import LLM_MODELS, LLM_PROMPTS, GEMINI_API_KEY, GROQ_API_KEY
+from .config import LLM_MODELS, LLM_PROMPTS, GEMINI_API_KEY, GROQ_API_KEY
 
 # ============================================================================
 # PREFERENCES PERSISTENCE
