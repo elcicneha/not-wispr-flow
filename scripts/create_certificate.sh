@@ -28,17 +28,17 @@ CONF
 
 /usr/bin/openssl req -new -newkey rsa:2048 -x509 -days 3650 -nodes \
   -out /tmp/cert.pem -keyout /tmp/key.pem \
-  -config /tmp/cert_config.conf -subj "/CN=$CERT_NAME"
+  -config /tmp/cert_config.conf -subj "/CN=$CERT_NAME" 2>/dev/null
 
 /usr/bin/openssl pkcs12 -export -out /tmp/cert.p12 \
-  -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:notwisprflow
+  -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:notwisprflow 2>/dev/null
 
 security import /tmp/cert.p12 -k ~/Library/Keychains/login.keychain-db \
-  -T /usr/bin/codesign -T /usr/bin/security -P "notwisprflow"
+  -T /usr/bin/codesign -T /usr/bin/security -P "notwisprflow" > /dev/null
 
 # Trust the self-signed cert for code signing
 security add-trusted-cert -d -r trustRoot -p codeSign \
-  -k ~/Library/Keychains/login.keychain-db /tmp/cert.pem
+  -k ~/Library/Keychains/login.keychain-db /tmp/cert.pem 2>/dev/null
 
 # Set partition list so codesign can access the key without a password prompt (macOS 10.12+)
 # This requires the login keychain password (your macOS login password) — one-time only
