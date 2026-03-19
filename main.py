@@ -48,6 +48,7 @@ import atexit
 from collections import deque
 
 from AppKit import NSApplication
+from Foundation import NSDate, NSDefaultRunLoopMode
 
 from notwisprflow.config import (
     HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
@@ -344,7 +345,7 @@ def health_monitor(listener, shutdown_event):
     """Background thread: monitors listener health, detects dead audio streams, and flushes buffer to disk."""
     while not shutdown_event.is_set():
         if not listener.is_alive():
-            NSApplication.sharedApplication().terminate_(None)
+            shutdown_event.set()
             return
 
         # Check recording thread health during recording.
@@ -367,7 +368,7 @@ def health_monitor(listener, shutdown_event):
 
         shutdown_event.wait(timeout=5)
 
-    NSApplication.sharedApplication().terminate_(None)
+    shutdown_event.set()
 
 
 # ============================================================================
@@ -455,7 +456,6 @@ def main():
 
     def shutdown(signum, frame):
         shutdown_event.set()
-        NSApplication.sharedApplication().terminate_(None)
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
@@ -523,8 +523,24 @@ def main():
 
     threading.Thread(target=_init_transcription, daemon=True).start()
 
-    # Run macOS event loop (blocks until quit)
-    NSApplication.sharedApplication().run()
+    # Run macOS event loop — manually pump events with a timeout so Python
+    # gets control back periodically, allowing signal handlers (Ctrl+C) to fire.
+    # NSApp.run() is a blocking C call that never yields to Python.
+    app = NSApplication.sharedApplication()
+    app.finishLaunching()
+    try:
+        while not shutdown_event.is_set():
+            event = app.nextEventMatchingMask_untilDate_inMode_dequeue_(
+                0xFFFFFFFFFFFFFFFF,  # NSEventMaskAny
+                NSDate.dateWithTimeIntervalSinceNow_(0.5),
+                NSDefaultRunLoopMode,
+                True,
+            )
+            if event:
+                app.sendEvent_(event)
+                app.updateWindows()
+    except KeyboardInterrupt:
+        pass
 
 
 # ============================================================================
