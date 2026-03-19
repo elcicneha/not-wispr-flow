@@ -39,7 +39,7 @@ ANTHROPIC_API_KEY = ""
 # "auto"    - Groq API first, local MLX Whisper fallback (default)
 # "online"  - Groq API only (requires GROQ_API_KEY)
 # "offline" - Local MLX Whisper only (no internet, ~2.3GB RAM)
-TRANSCRIPTION_MODE = "offline"
+TRANSCRIPTION_MODE = "auto"
 
 # Language for Whisper transcription
 # "en" = English only (recommended), None = auto-detect all languages

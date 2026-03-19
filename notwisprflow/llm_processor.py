@@ -9,45 +9,12 @@ Provides intelligent text enhancement using multiple providers:
 All model definitions live in config.py (LLM_MODELS dict).
 """
 
-import json
 import os
 import time
 from typing import Optional, Tuple
 
 from .config import LLM_MODELS, LLM_PROMPTS, GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY
-
-# ============================================================================
-# PREFERENCES PERSISTENCE
-# ============================================================================
-_PREFS_DIR = os.path.expanduser("~/.config/notwisprflow")
-_PREFS_FILE = os.path.join(_PREFS_DIR, "preferences.json")
-
-
-def load_preference(key: str, default=None):
-    """Load a single preference from ~/.config/notwisprflow/preferences.json."""
-    try:
-        if os.path.exists(_PREFS_FILE):
-            with open(_PREFS_FILE, "r") as f:
-                prefs = json.load(f)
-            return prefs.get(key, default)
-    except Exception:
-        pass
-    return default
-
-
-def save_preference(key: str, value):
-    """Save a single preference to ~/.config/notwisprflow/preferences.json."""
-    try:
-        os.makedirs(_PREFS_DIR, exist_ok=True)
-        prefs = {}
-        if os.path.exists(_PREFS_FILE):
-            with open(_PREFS_FILE, "r") as f:
-                prefs = json.load(f)
-        prefs[key] = value
-        with open(_PREFS_FILE, "w") as f:
-            json.dump(prefs, f, indent=2)
-    except Exception:
-        pass
+from .preferences import load_preference, save_preference, resolve_api_key
 
 
 # ============================================================================
@@ -105,10 +72,10 @@ class LLMProcessor:
         self._prompt_config = LLM_PROMPTS.get(prompt, {})
 
         # Resolve API keys for all providers at init (so switching is instant)
-        self._gemini_api_key = self._resolve_gemini_api_key(logger)
-        self._groq_api_key = self._resolve_groq_api_key(logger)
-        self._openai_api_key = self._resolve_openai_api_key(logger)
-        self._anthropic_api_key = self._resolve_anthropic_api_key(logger)
+        self._gemini_api_key = resolve_api_key(GEMINI_API_KEY, "GEMINI_API_KEY", "~/.config/notwisprflow/gemini_api_key")
+        self._groq_api_key = resolve_api_key(GROQ_API_KEY, "GROQ_API_KEY", "~/.config/notwisprflow/api_key")
+        self._openai_api_key = resolve_api_key(OPENAI_API_KEY, "OPENAI_API_KEY", "~/.config/notwisprflow/openai_api_key")
+        self._anthropic_api_key = resolve_api_key(ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY", "~/.config/notwisprflow/anthropic_api_key")
 
         # Lazy-initialized clients (one per provider)
         self._gemini_client = None
@@ -268,106 +235,6 @@ class LLMProcessor:
         if self._anthropic_api_key:
             available.add("anthropic")
         return available
-
-    @staticmethod
-    def _resolve_gemini_api_key(logger) -> str:
-        """Resolve Gemini API key from config.py → env var → dotfile."""
-        if GEMINI_API_KEY:
-            logger.debug("Gemini API key: found in config.py")
-            return GEMINI_API_KEY
-
-        env_key = os.environ.get("GEMINI_API_KEY", "")
-        if env_key:
-            logger.debug("Gemini API key: found in environment variable")
-            return env_key
-
-        key_file = os.path.expanduser("~/.config/notwisprflow/gemini_api_key")
-        if os.path.exists(key_file):
-            try:
-                with open(key_file, "r") as f:
-                    key = f.read().strip()
-                if key:
-                    logger.debug(f"Gemini API key: found in {key_file}")
-                    return key
-            except Exception as e:
-                logger.warning(f"Failed to read Gemini API key from {key_file}: {e}")
-
-        return ""
-
-    @staticmethod
-    def _resolve_groq_api_key(logger) -> str:
-        """Resolve Groq API key from config.py → env var → dotfile (same key as Whisper transcription)."""
-        if GROQ_API_KEY:
-            logger.debug("Groq LLM API key: found in config.py")
-            return GROQ_API_KEY
-
-        env_key = os.environ.get("GROQ_API_KEY", "")
-        if env_key:
-            logger.debug("Groq LLM API key: found in environment variable")
-            return env_key
-
-        key_file = os.path.expanduser("~/.config/notwisprflow/api_key")
-        if os.path.exists(key_file):
-            try:
-                with open(key_file, "r") as f:
-                    key = f.read().strip()
-                if key:
-                    logger.debug(f"Groq LLM API key: found in {key_file}")
-                    return key
-            except Exception as e:
-                logger.warning(f"Failed to read Groq API key from {key_file}: {e}")
-
-        return ""
-
-    @staticmethod
-    def _resolve_openai_api_key(logger) -> str:
-        """Resolve OpenAI API key from config.py → env var → dotfile."""
-        if OPENAI_API_KEY:
-            logger.debug("OpenAI API key: found in config.py")
-            return OPENAI_API_KEY
-
-        env_key = os.environ.get("OPENAI_API_KEY", "")
-        if env_key:
-            logger.debug("OpenAI API key: found in environment variable")
-            return env_key
-
-        key_file = os.path.expanduser("~/.config/notwisprflow/openai_api_key")
-        if os.path.exists(key_file):
-            try:
-                with open(key_file, "r") as f:
-                    key = f.read().strip()
-                if key:
-                    logger.debug(f"OpenAI API key: found in {key_file}")
-                    return key
-            except Exception as e:
-                logger.warning(f"Failed to read OpenAI API key from {key_file}: {e}")
-
-        return ""
-
-    @staticmethod
-    def _resolve_anthropic_api_key(logger) -> str:
-        """Resolve Anthropic API key from config.py → env var → dotfile."""
-        if ANTHROPIC_API_KEY:
-            logger.debug("Anthropic API key: found in config.py")
-            return ANTHROPIC_API_KEY
-
-        env_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if env_key:
-            logger.debug("Anthropic API key: found in environment variable")
-            return env_key
-
-        key_file = os.path.expanduser("~/.config/notwisprflow/anthropic_api_key")
-        if os.path.exists(key_file):
-            try:
-                with open(key_file, "r") as f:
-                    key = f.read().strip()
-                if key:
-                    logger.debug(f"Anthropic API key: found in {key_file}")
-                    return key
-            except Exception as e:
-                logger.warning(f"Failed to read Anthropic API key from {key_file}: {e}")
-
-        return ""
 
     # ── Client initialization ──────────────────────────────────────────────
 

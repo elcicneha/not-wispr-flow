@@ -18,7 +18,8 @@ import sys
 import threading
 import numpy as np
 
-SAMPLE_RATE = 16000  # Whisper's native sample rate
+from .constants import SAMPLE_RATE
+from .preferences import resolve_api_key
 
 
 # ============================================================================
@@ -257,7 +258,7 @@ class TranscriptionManager:
 
         # Groq config — resolve API key: config.py → env var → dotfile
         self._groq_client = None
-        self._groq_api_key = self._resolve_groq_key(groq_api_key, logger)
+        self._groq_api_key = resolve_api_key(groq_api_key, "GROQ_API_KEY", "~/.config/notwisprflow/api_key")
         self._groq_model = groq_model
 
         # Local MLX model state
@@ -377,32 +378,6 @@ class TranscriptionManager:
             subprocess.run(["osascript", "-e", script], timeout=60)
         except Exception:
             pass
-
-    @staticmethod
-    def _resolve_groq_key(config_key, logger):
-        """Resolve Groq API key from config.py → env var → ~/.config/notwisprflow/api_key."""
-        _KEY_FILE = os.path.expanduser("~/.config/notwisprflow/api_key")
-
-        if config_key:
-            logger.debug("Groq API key: found in config.py")
-            return config_key
-
-        env_key = os.environ.get("GROQ_API_KEY", "")
-        if env_key:
-            logger.debug("Groq API key: found in environment variable")
-            return env_key
-
-        if os.path.exists(_KEY_FILE):
-            try:
-                with open(_KEY_FILE, "r") as f:
-                    file_key = f.read().strip()
-                if file_key:
-                    logger.debug(f"Groq API key: found in {_KEY_FILE}")
-                    return file_key
-            except Exception as e:
-                logger.warning(f"Failed to read API key from {_KEY_FILE}: {e}")
-
-        return ""
 
     def _validate_groq_key(self):
         """Validate that a Groq API key is available."""
