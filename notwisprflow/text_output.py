@@ -21,7 +21,7 @@ from ApplicationServices import (
     kAXSelectedTextRangeAttribute,
     kAXErrorSuccess,
 )
-from AppKit import NSPasteboard, NSData
+from AppKit import NSPasteboard, NSPasteboardItem, NSData
 from pynput.keyboard import Key
 
 logger = logging.getLogger("notwisprflow")
@@ -152,7 +152,17 @@ def insert_text(text, state):
         return
 
     pb = NSPasteboard.generalPasteboard()
-    old_clipboard = pb.stringForType_('public.utf8-plain-text')
+
+    # Save ALL clipboard items (text, images, files, etc.) — not just plain text
+    old_items = []
+    for item in (pb.pasteboardItems() or []):
+        item_data = {}
+        for ptype in item.types():
+            data = item.dataForType_(ptype)
+            if data is not None:
+                item_data[ptype] = data
+        if item_data:
+            old_items.append(item_data)
 
     pb.clearContents()
     if not pb.setString_forType_(text, 'public.utf8-plain-text'):
@@ -172,7 +182,14 @@ def insert_text(text, state):
     # Wait for paste to complete before restoring clipboard
     time.sleep(0.2)
 
-    # Restore previous clipboard contents
+    # Restore previous clipboard contents (concealed to avoid clipboard history duplicate)
     pb.clearContents()
-    if old_clipboard is not None:
-        pb.setString_forType_(old_clipboard, 'public.utf8-plain-text')
+    if old_items:
+        new_items = []
+        for item_data in old_items:
+            item = NSPasteboardItem.alloc().init()
+            for ptype, data in item_data.items():
+                item.setData_forType_(data, ptype)
+            new_items.append(item)
+        pb.writeObjects_(new_items)
+        pb.setData_forType_(NSData.data(), 'org.nspasteboard.ConcealedType')
