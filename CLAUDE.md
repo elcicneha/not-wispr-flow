@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Not Wispr Flow is a macOS voice dictation tool providing system-wide speech-to-text with hybrid online/offline support. It uses Groq API for fast cloud transcription when available, with local MLX Whisper as a fallback. Silero VAD handles silence detection. It runs as a background app with a menu bar icon and supports two recording modes:
+Not Wispr Flow is a macOS voice dictation tool providing system-wide speech-to-text with hybrid online/offline support. It uses Groq API for fast cloud transcription when available, with local MLX Whisper as a fallback. Silero VAD handles silence detection. It runs as a background menu bar app with two recording modes:
 
 - **Press-and-Hold**: Hold Right Control to record, release to transcribe
 - **Toggle Mode**: Press Right Control + Space to start recording, Right Control to stop
@@ -21,74 +21,56 @@ python3 main.py
 
 # Build .app bundle
 rm -rf build dist && python3 setup.py py2app
-# Output: dist/Not Wispr Flow.app
-
-# FAST development workflow (after first install)
-./scripts/dev_install.sh
-# Updates .py files in existing app bundle (~1 second vs ~30+ seconds)
-# Use this for quick iteration when changing main.py or config.py
 
 # Full install to /Applications (builds + signs + installs)
 ./scripts/install_service.sh
-# Use this for: first install, dependency changes, or major changes
 
-# One-step installer (for end users or first-time setup)
+# One-step installer (end users or first-time setup)
 ./install.sh
-# Handles everything: Python, venv, certificate, build, install
 
-# Uninstall (removes app, logs, build artifacts)
+# Uninstall
 ./uninstall.sh
-
-# Check service status
-./scripts/check_status.sh
 ```
 
-There are no automated tests. Manual testing requires running the app and dictating into a text editor.
+No automated tests. Manual testing requires running the app and dictating into a text editor.
 
 ## Architecture
 
 ### Module Structure
-- **`main.py`** — App shell (~530 lines): `AppState`, transcription pipeline, health monitor, entry point
-- **`notwisprflow/config.py`** — User-facing settings (model, hotkeys, transcription mode, API keys, LLM prompt presets)
-- **`notwisprflow/constants.py`** — Internal constants not meant for user editing (e.g. `SAMPLE_RATE`)
-- **`notwisprflow/keyboard_handler.py`** — Keyboard state machine: `create_handlers(state, update_icon_fn, on_audio_ready_fn)` returns `(on_press, on_release)` closures for pynput
-- **`notwisprflow/audio.py`** — Audio recording lifecycle: `start_recording`, `stop_recording`, `cancel_recording`, buffer overflow to disk, recording stats
-- **`notwisprflow/menubar.py`** — All menu bar UI: `MenuBarIconManager`, `MenuDelegate`, `_PromptPanelController`, status updater, `setup_menu_bar(shutdown_event, state)`
-- **`notwisprflow/text_output.py`** — Text insertion via clipboard paste or CGEvent typing, cursor context via macOS Accessibility APIs
-- **`notwisprflow/permissions.py`** — macOS permission checks: microphone access, accessibility trust
-- **`notwisprflow/preferences.py`** — Preferences persistence (`~/.config/notwisprflow/preferences.json`) and shared `resolve_api_key()` utility
-- **`notwisprflow/transcription.py`** — All transcription logic: `TranscriptionManager` class, MLX Whisper backend, Groq API client, Silero VAD, connectivity monitoring, model lifecycle management
-- **`notwisprflow/llm_processor.py`** — LLM API integration: `LLMProcessor` class, multi-provider dispatch (Gemini/Groq/OpenAI/Anthropic)
-- **`notwisprflow/post_processing.py`** — Text post-processing pipeline: orchestrates LLM enhancement + smart spacing based on cursor context
-- **`notwisprflow/media_control.py`** — Media pause/resume via macOS private `MediaRemote.framework`; playing detection via power assertions (`pmset`)
+- **`main.py`** — App shell: `AppState`, transcription pipeline, health monitor, entry point
+- **`notwisprflow/config.py`** — User-facing settings (model, hotkeys, transcription mode, API keys, LLM prompts)
+- **`notwisprflow/constants.py`** — Internal constants (e.g. `SAMPLE_RATE`). NOT for user-facing settings
+- **`notwisprflow/keyboard_handler.py`** — Keyboard state machine: `create_handlers()` returns `(on_press, on_release)` closures
+- **`notwisprflow/audio.py`** — Recording lifecycle, buffer overflow to disk, recording stats
+- **`notwisprflow/menubar.py`** — All menu bar UI: icon manager, menu delegate, prompt panel, status updater
+- **`notwisprflow/text_output.py`** — Text insertion (clipboard paste or CGEvent typing), cursor context via Accessibility APIs
+- **`notwisprflow/permissions.py`** — macOS mic/accessibility permission checks
+- **`notwisprflow/preferences.py`** — Prefs persistence (`~/.config/notwisprflow/preferences.json`) and `resolve_api_key()`
+- **`notwisprflow/transcription.py`** — `TranscriptionManager`: MLX Whisper, Groq API, Silero VAD, connectivity monitor, model lifecycle
+- **`notwisprflow/llm_processor.py`** — `LLMProcessor`: multi-provider dispatch (Gemini/Groq/OpenAI/Anthropic)
+- **`notwisprflow/post_processing.py`** — LLM enhancement + smart spacing pipeline
+- **`notwisprflow/startup.py`** — LaunchAgent plist management for start-at-login
+- **`notwisprflow/media_control.py`** — Media pause/resume via macOS private `MediaRemote.framework`
 
 ### Dependency Graph (acyclic)
 ```
-main.py → keyboard_handler, audio, menubar, text_output, permissions, preferences
+main.py → keyboard_handler, audio, menubar, text_output, permissions, preferences, startup
 keyboard_handler → audio, text_output, config
 audio → config, constants, media_control
-menubar → config, preferences, text_output
-text_output → (standalone + macOS APIs)
-permissions → constants (standalone + macOS APIs)
-preferences → (standalone, file I/O)
+menubar → config, preferences, text_output, startup
+text_output, permissions, media_control, startup → standalone (no app imports)
 transcription → constants, preferences
 llm_processor → config, preferences
 post_processing → llm_processor
-media_control → (standalone + macOS APIs)
 ```
 
-### Key Components
-1. **`TranscriptionManager`** — Unified transcription interface in `notwisprflow/transcription.py`. Handles mode selection (offline/online/auto), Groq API calls, local MLX Whisper, VAD, and background model load/unload
-2. **`AppState`** — Global state in `main.py`: recording mode, audio buffer, key states, thread lock, text insertion mode. Passed as an explicit parameter to module functions — no hidden globals
-3. **Audio Pipeline** — `soundcard` recorder → numpy buffer (lock-free deque) → `TranscriptionManager.contains_speech()` → `TranscriptionManager.transcribe()` → clipboard paste (default)
-4. **Smart Model Management** — In auto mode, a background connectivity monitor unloads the local model after 60s stable internet (frees ~2.3GB RAM) and pre-loads it immediately when connectivity drops
-5. **Keyboard Handling** — `keyboard_handler.create_handlers()` returns `(on_press, on_release)` closures that capture `state` and callbacks. Uses `audio.start_recording()` / `audio.stop_recording()` with callback-based dependency injection to avoid circular imports
-6. **Menu Bar** — `NSStatusBar` icon with animated states (idle/recording/processing) via `MenuBarIconManager` in `notwisprflow/menubar.py`, plus `MenuDelegate` for Retype Last (Ctrl+Cmd+C), Paste Mode toggle, LLM Model picker submenu, Prompts editor, Open Logs, and Quit
-7. **LLM Processor** — `LLMProcessor` in `notwisprflow/llm_processor.py` dispatches to Gemini, Groq, OpenAI, or Anthropic providers based on `LLM_MODELS` config. Preferences (selected model, prompt) persist in `~/.config/notwisprflow/preferences.json`
-8. **Media Control** — `notwisprflow/media_control.py` uses `MRMediaRemoteSendCommand` from macOS private `MediaRemote.framework` (loaded via `objc.loadBundleFunctions`) to send PAUSE/PLAY commands to whatever app is the system Now Playing source. Detects playing state via macOS power assertions (`pmset -g assertions` checking for "Playing audio") since MediaRemote query APIs are broken for browser media on macOS Sequoia. Runs async in background thread from `start_recording()`; resumes in `_transcription_wrapper()` finally block
-9. **Cursor Context** — `get_cursor_context()` in `notwisprflow/text_output.py` reads text around cursor via macOS Accessibility APIs for smart spacing
-10. **Buffer Overflow** — Long recordings flush to `.npy` files on disk when buffer exceeds threshold; reassembled at transcription time. Managed by `notwisprflow/audio.py`
-11. **Health Monitor** — Background thread in `main.py` detecting dead audio streams and triggering buffer flushes
+### Key Patterns
+- **Explicit state passing**: `AppState` passed as parameter to all modules — no hidden globals. Single thread lock
+- **Callback DI**: `stop_recording(state, update_icon_fn, on_audio_ready_fn)` — audio doesn't know about transcription, avoids circular imports
+- **Closures for pynput**: `create_handlers()` returns closures because pynput only accepts `(key)` signature
+- **Audio pipeline**: `soundcard` → deque (lock-free, GIL-atomic) → VAD → transcribe → clipboard paste
+- **Smart model management**: In auto mode, connectivity monitor unloads local model after 60s stable internet (~2.3GB freed), pre-loads when connectivity drops
+- **NSObject subclasses** get `_state` attribute set after `alloc().init()` (PyObjC pattern)
 
 ### Recording State Machine
 ```
@@ -100,135 +82,66 @@ Hold + hotkey release            → Stop recording, transcribe
 Toggle + hotkey press            → Stop recording, transcribe
 ```
 
-Stuck-state recovery: if mode is set but not recording (stream crashed), the next hotkey press salvages any captured audio and resets to idle.
+Stuck-state recovery: if mode is set but not recording (stream crashed), next hotkey press salvages captured audio and resets.
 
 ### Threading Model
-- **Main thread**: macOS NSApplication run loop (menu bar, signal handling)
-- **Audio callback thread**: `soundcard` recorder callback appends to deque (lock-free, GIL-atomic)
-- **MLX worker thread**: Dedicated thread for all MLX/Metal GPU operations (avoids Metal threading assertions); managed by `TranscriptionManager`
-- **Transcription thread**: Spawned per recording, owns a snapshot of the audio buffer
-- **Connectivity monitor thread**: (auto mode only) Checks internet every 30s, manages model load/unload with hysteresis
-- **Health monitor thread**: Daemon, checks listener/stream health and flushes buffer every 5s
-- **Keyboard listener thread**: `pynput.Listener`, runs via PyObjC event tap
+- **Main thread**: NSApplication manual event loop (0.5s timeout for Ctrl+C support)
+- **Audio callback**: `soundcard` recorder, lock-free `deque.append()` — must never block
+- **MLX worker**: Dedicated thread for all Metal/MLX GPU ops (avoids Metal threading assertions)
+- **Transcription**: Per-recording thread, owns buffer snapshot (no shared state)
+- **Connectivity monitor**: (auto mode) Checks internet every 30s, manages model load/unload
+- **Health monitor**: Daemon, checks stream health every 5s
+- **Keyboard listener**: `pynput.Listener` via PyObjC event tap
 
 ### Build System
-`setup.py` configures py2app. Key settings:
-- `LSUIElement: True` — no Dock icon (background agent)
-- Packages bundled: numpy, soundcard, pynput, mlx_whisper, mlx, av, huggingface_hub, tokenizers, onnxruntime, groq, pydantic, google-genai
-- Explicitly excluded: torch, torchaudio, silero_vad (VAD uses custom numpy-only ONNX wrapper instead)
-- `install_service.sh` code-signs with identity "Not Wispr Flow Dev" to preserve macOS permissions across rebuilds
-- `install_service.sh` fixes MLX library rpaths and moves `mlx.metallib` to Frameworks directory
+`setup.py` configures py2app. `LSUIElement: True` (no Dock icon). Excludes torch/torchaudio/silero_vad (VAD uses numpy-only ONNX wrapper). `install_service.sh` code-signs and fixes MLX rpaths.
 
 ## Configuration
 
-**User-facing settings** are in `notwisprflow/config.py` (edit this file to customize):
+User-facing settings in `notwisprflow/config.py`. Internal constants stay in their respective modules.
 
-```python
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"  # Model selection
-LANGUAGE = None           # None = auto-detect all languages, "en" = English only
-HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}  # Set of keys that trigger recording
-TOGGLE_KEY = Key.space                # Combine with hotkey for toggle mode
-TRANSCRIPTION_MODE = "auto"           # "auto", "offline", or "online"
-GROQ_API_KEY = ""                     # Required for "online", optional for "auto"
-GROQ_MODEL = "whisper-large-v3"       # Groq Whisper model
-GEMINI_API_KEY = ""                   # Required for Gemini LLM models
-LLM_MODEL = "llama-3.3-70b-versatile" # LLM model for text enhancement (or "disabled")
-LLM_TEMPERATURE = 0.3                # LLM temperature (0.0-1.0)
-LLM_MODELS = { ... }                 # All available models (single source of truth)
-LLM_PROMPTS = { ... }                # Prompt presets for text enhancement
-LLM_PROMPT = "detailed"              # Default prompt preset
-USE_TYPE_MODE = False                 # False = paste mode (default), True = type mode
-PAUSE_MEDIA_ON_RECORD = True          # Pause system media during recording
-DEBUG = False                         # Verbose logging
-```
+Key non-obvious settings:
+- `HOTKEY_KEYS` is a **set** — pynput may report `Key.ctrl`, `Key.ctrl_r`, or `Key.ctrl_l` depending on macOS/keyboard
+- `TRANSCRIPTION_MODE`: `"auto"` (cloud with offline fallback), `"offline"`, or `"online"`
+- `LLM_MODEL`: set to `"disabled"` to turn off. LLM only runs with online transcription, never offline
+- `USE_TYPE_MODE`: `False` = clipboard paste (default), `True` = character-by-character typing
 
-**Developer/internal constants** are spread across modules (not in `config.py`):
-
-```python
-# notwisprflow/constants.py
-SAMPLE_RATE = 16000              # Whisper's native sample rate
-
-# main.py
-MIN_RECORDING_DURATION = 0.2     # Reject short recordings (seconds)
-FLUSH_BUFFER_THRESHOLD_MB = 5    # Buffer overflow threshold
-
-# notwisprflow/keyboard_handler.py
-DEBOUNCE_MS = 100                # Key press debounce (milliseconds)
-
-# notwisprflow/text_output.py
-CONTEXT_CHARS = 200              # Context window for cursor context
-```
-
-`HOTKEY_KEYS` is a **set** — pynput may report `Key.ctrl`, `Key.ctrl_r`, or `Key.ctrl_l` depending on macOS version/keyboard. The `is_hotkey(key)` function checks membership.
-
-**API keys** can also be stored as files instead of in `notwisprflow/config.py`. Resolution order: config value → environment variable → dotfile (handled by `resolve_api_key()` in `notwisprflow/preferences.py`):
-- `~/.config/notwisprflow/api_key` — Groq API key
-- `~/.config/notwisprflow/gemini_api_key` — Gemini API key
-- `~/.config/notwisprflow/openai_api_key` — OpenAI API key
-- `~/.config/notwisprflow/anthropic_api_key` — Anthropic API key
-- `~/.config/notwisprflow/preferences.json` — Runtime state (selected LLM model, prompt preset)
+API key resolution order (via `resolve_api_key()`): config.py → env var → dotfile in `~/.config/notwisprflow/` (`api_key`, `gemini_api_key`, `openai_api_key`, `anthropic_api_key`). Runtime state (LLM model, prompt) persists in `~/.config/notwisprflow/preferences.json`.
 
 ## Important Gotchas
 
-- **macOS permissions** must be granted to the **app bundle** ("Not Wispr Flow"), not Terminal/Python: Microphone + Accessibility + Input Monitoring (Privacy & Security)
+- **macOS permissions** go to the **app bundle** ("Not Wispr Flow"), not Terminal: Microphone + Accessibility + Input Monitoring
 - **Clean build required** after code changes: `rm -rf build dist` before `python3 setup.py py2app`
-- **VAD uses ONNX runtime** — `SileroVADOnnx` class wraps the bundled `resources/silero_vad.onnx` model with numpy-only inference (no torch dependency)
-- **MLX operations are pinned to a single thread** — `TranscriptionManager` spawns a dedicated MLX worker thread with a queue; all Metal/MLX calls happen there to avoid threading assertions
-- **Groq API** sends audio as WAV bytes over HTTPS; timeout is 10s; free tier allows 20 requests/min, 2000/day
-- **Text insertion uses clipboard paste by default** — controlled by `USE_TYPE_MODE` in `notwisprflow/config.py` (False = paste, True = type). `insert_text()` in `notwisprflow/text_output.py` saves/restores clipboard via `NSPasteboard`, restores immediately to avoid clipboard manager capture. Toggle at runtime via menu bar "Paste Mode" item
-- **LLM post-processing** — controlled by `LLM_MODEL` in `notwisprflow/config.py` (set to `"disabled"` to turn off). Model can be switched at runtime via menu bar "LLM Model" submenu. Prompt preset can be switched via "Prompts..." menu. Selections persist in `~/.config/notwisprflow/preferences.json`. Supports Gemini and Groq providers. LLM only runs when using online transcription (Groq backend), never with local/offline transcription. All model definitions live in `LLM_MODELS` dict, all prompt presets in `LLM_PROMPTS` dict in `notwisprflow/config.py` (single source of truth)
-- **Media pause/resume** — controlled by `PAUSE_MEDIA_ON_RECORD` in `notwisprflow/config.py`. Uses macOS private `MediaRemote.framework` via `objc.loadBundleFunctions` to send `MRMediaRemoteSendCommand(PAUSE/PLAY)` — works with any app registered as the system Now Playing source (Spotify, YouTube in browser, VLC, podcasts, etc.). Detects playing state via macOS power assertions (`pmset -g assertions` for "Playing audio") since the MediaRemote query APIs (`MRMediaRemoteGetNowPlayingApplicationIsPlaying`) are broken for browser media on macOS Sequoia. Pause is async (background thread) to avoid delaying recording start
-- **Exit code 0** on fatal errors is intentional — prevents LaunchAgent `KeepAlive` restart loops
-- **PID file lock** (`~/Library/Logs/NotWisprFlow/notwisprflow.pid`) prevents duplicate instances
-- **Audio callback must never block** — uses lock-free `deque.append()` (GIL-atomic); any blocking I/O in the callback hangs `stream.stop()`
-- **`audio.stop_recording()`** in `notwisprflow/audio.py` snapshots the buffer before clearing — calls `on_audio_ready_fn` callback with the snapshot, so transcription thread owns its own copy, no shared state
-- **Audio uses SoundCard (CoreAudio)** not sounddevice/PortAudio — `soundcard` recorder with `samplerate=16000, channels=[0]` in `notwisprflow/audio.py`
-- **Log files**: `~/Library/Logs/NotWisprFlow/notwisprflow.log` (rotating, 10MB x 5), restricted permissions (0o700)
-- **Recording stats**: `recording_stats.jsonl` in the project directory — JSONL with duration, buffer size, mode, processing time per recording
-- Model sizes: Whisper `large-v3-turbo` (~1.6GB, ~2.3GB RAM), Silero VAD ONNX (~6MB, minimal RAM)
+- **MLX pinned to single thread** — all Metal/MLX calls go through `TranscriptionManager`'s dedicated worker queue
+- **Audio callback must never block** — blocking I/O in the callback hangs `stream.stop()`
+- **`stop_recording()` snapshots buffer** before clearing — transcription thread owns its copy
+- **Text insertion** saves/restores clipboard via `NSPasteboard`, restores immediately to avoid clipboard manager capture
+- **Media playing detection** uses `pmset -g assertions` because MediaRemote query APIs are broken for browser media on macOS Sequoia. Command APIs (PAUSE/PLAY) still work
+- **Exit code 0** on fatal errors — intentional, prevents LaunchAgent restart loops
+- **PID file lock**: `~/Library/Logs/NotWisprFlow/notwisprflow.pid`
+- **Logs**: `~/Library/Logs/NotWisprFlow/notwisprflow.log` (rotating, 10MB x 5)
 
 ## Modifying the Code
 
 ### Adding a new recording mode
-1. Add mode tracking to `AppState.__init__()` in `main.py`
-2. Add activation logic in `on_press()` inside `notwisprflow/keyboard_handler.py`
-3. Add deactivation logic in `on_release()` inside `notwisprflow/keyboard_handler.py`
-4. Update state transitions in both functions
-5. Add stuck-state recovery for the new mode in both handlers
-
-### Changing Whisper parameters
-Edit `_initialize_whisper()` in `notwisprflow/transcription.py` — the `mlx_whisper.transcribe()` call inside `mlx_worker()` accepts additional keyword arguments. The returned result is a dict with a `"text"` key.
+1. Add mode to `AppState.__init__()` in `main.py`
+2. Add activation/deactivation in `on_press()`/`on_release()` in `keyboard_handler.py`
+3. Add stuck-state recovery for the new mode
 
 ### Tuning VAD sensitivity
-In `TranscriptionManager.contains_speech()` in `notwisprflow/transcription.py`, adjust the parameters passed to `_get_speech_timestamps_numpy()`:
-- `threshold` (0.3-0.6): Lower = more sensitive (catches quieter speech), higher = less false positives
-- `min_speech_duration_ms`: Minimum speech segment duration to consider valid
-- `min_silence_duration_ms`: Minimum silence duration to split segments
+In `TranscriptionManager.contains_speech()`, adjust `_get_speech_timestamps_numpy()` params: `threshold` (0.3-0.6), `min_speech_duration_ms`, `min_silence_duration_ms`.
 
-### Adding text post-processing
-Insert transformations in `post_process()` in `notwisprflow/post_processing.py` which receives `(text, context_before, context_after, backend, llm_model, llm_processor)`. Pipeline: LLM enhancement (if enabled + online) → smart spacing. To add a new LLM provider, edit `notwisprflow/llm_processor.py`. To add a new prompt preset, add an entry to `LLM_PROMPTS` in `notwisprflow/config.py`.
-
-### Changing text insertion behavior
-Set the default mode via `USE_TYPE_MODE` in `notwisprflow/config.py` (False = clipboard paste, True = character-by-character typing). Users can toggle at runtime via the "Paste Mode" menu bar item. Modify `insert_text()` in `notwisprflow/text_output.py` to change the implementation details.
-
-### Changing audio recording behavior
-Edit `notwisprflow/audio.py`. `start_recording(state, update_icon_fn)` and `stop_recording(state, update_icon_fn, on_audio_ready_fn)` manage the recording lifecycle. `stop_recording` uses a callback (`on_audio_ready_fn`) to dispatch audio data without knowing about transcription.
-
-### Changing menu bar items
-Edit `notwisprflow/menubar.py`. `setup_menu_bar(shutdown_event, state)` builds the menu. `MenuDelegate` handles all menu actions. State is accessed via `self._state` (passed during setup).
+### Adding an LLM provider
+Add provider in `llm_processor.py` (key resolution, client init, process method). Add models to `LLM_MODELS` in `config.py`. Add prompt presets to `LLM_PROMPTS` in `config.py`.
 
 ## Design Decisions Log (MANDATORY)
 
-**After completing any task**, you MUST append a new entry to `DESIGN_DECISIONS.md`. This is not optional — treat it as the final step of every task before considering the work done.
+**After completing any task**, append a new entry to `DESIGN_DECISIONS.md`:
 
-Each entry should include:
+1. **What was done**
+2. **What was explicitly NOT done and why**
+3. **Alternatives considered**
+4. **What was tried and didn't work** (include specifics)
+5. **What worked and why**
 
-1. **What was done** — Brief summary of the change/feature/fix implemented
-2. **What was explicitly NOT done and why** — Scope boundaries, features deliberately left out, simplifications chosen
-3. **Alternatives considered** — Other approaches that were evaluated
-4. **What was tried and didn't work** — Failed attempts, dead ends, things that looked promising but broke (include specifics: error messages, why it failed)
-5. **What worked and why** — The chosen approach and the reasoning behind it
-
-Follow the existing format in the file: `## Section Title`, then `**Decision: ...**`, then bullet points with details, ending with `---`.
-
-Skip this step ONLY if the task was purely informational (answering a question, explaining code) with zero code changes.
+Format: `## Section Title`, `**Decision: ...**`, bullet points, ending with `---`. Skip ONLY for purely informational tasks with zero code changes.

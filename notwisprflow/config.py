@@ -67,17 +67,6 @@ HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}
 TOGGLE_KEY = Key.space
 
 # ============================================================================
-# LLM POST-PROCESSING
-# ============================================================================
-# Cleans up transcription text (capitalization, punctuation, filler words).
-# Adds ~0.5-2s latency. Only runs with online transcription, never offline.
-# Set LLM_MODEL to "disabled" to turn off. Changeable at runtime via menu bar.
-
-LLM_MODEL = "llama-3.3-70b-versatile"  # Must be a key from LLM_MODELS below
-LLM_TEMPERATURE = 0.3                  # 0.0 = consistent, 1.0 = creative
-
-
-# ============================================================================
 # BEHAVIOR
 # ============================================================================
 # Text insertion: False = clipboard paste (default, fast), True = type each char
@@ -95,17 +84,14 @@ START_AT_LOGIN = True
 DEBUG = False
 
 
-
-
-
-
-
-
-
 # ============================================================================
-# MODEL & PROMPT REGISTRY (rarely needs editing)
+# LLM POST-PROCESSING
 # ============================================================================
-# To add/remove an LLM model, edit this dict. Menu bar reads from here.
+# Cleans up transcription text (capitalization, punctuation, filler words).
+# Adds ~0.5-2s latency. Only runs with online transcription, never offline.
+# Set LLM_MODEL to "disabled" to turn off. Changeable at runtime via menu bar.
+#
+# Available models — to add a custom model, add an entry here:
 LLM_MODELS = {
     "disabled": {"provider": None, "display": "Disabled", "group": None},
     # Gemini
@@ -122,7 +108,11 @@ LLM_MODELS = {
     "claude-sonnet-4-5-20250929": {"provider": "anthropic", "display": "Claude Sonnet 4.5 (Best)", "group": "Anthropic"},
 }
 
-# To add/remove a prompt style, edit this dict.
+# Default model — must be a key from LLM_MODELS above (or "disabled")
+LLM_MODEL = "llama-3.3-70b-versatile"
+LLM_TEMPERATURE = 0.3  # 0.0 = consistent, 1.0 = creative
+
+# Prompt presets — to add/remove a prompt style, edit this dict.
 # Templates use {transcription}, {context_before}, {context_after} placeholders.
 LLM_PROMPTS = {
     "detailed": {
