@@ -94,13 +94,61 @@ def main():
     config_result = subprocess.run(
         [str(VENV_PYTHON), "-c",
          f"import sys; sys.path.insert(0, '{PROJECT_DIR}'); "
-         "from config import TRANSCRIPTION_MODE, WHISPER_MODEL; "
-         "print(TRANSCRIPTION_MODE); print(WHISPER_MODEL)"],
+         "from notwisprflow.config import TRANSCRIPTION_MODE, WHISPER_MODEL, GROQ_API_KEY; "
+         "print(TRANSCRIPTION_MODE); print(WHISPER_MODEL); print(GROQ_API_KEY)"],
         capture_output=True, text=True,
     )
     config_lines = config_result.stdout.strip().split("\n")
     transcription_mode = config_lines[0] if len(config_lines) > 0 else "auto"
     whisper_model = config_lines[1] if len(config_lines) > 1 else "mlx-community/whisper-large-v3-turbo"
+    groq_api_key = config_lines[2] if len(config_lines) > 2 else ""
+
+    # Check all API key sources
+    has_api_key = bool(groq_api_key)
+    if not has_api_key:
+        api_key_file = Path.home() / ".config" / "notwisprflow" / "api_key"
+        if api_key_file.exists() and api_key_file.read_text().strip():
+            has_api_key = True
+    if not has_api_key:
+        has_api_key = bool(os.environ.get("GROQ_API_KEY", ""))
+
+    # ── Auto mode without API key: ask before building ──
+    if transcription_mode == "auto" and not has_api_key:
+        console.print()
+        note = Text()
+        note.append("No Groq API key found.\n\n", style="bold yellow")
+        note.append("Without a key, the app runs offline only.\n")
+        note.append("For faster cloud transcription:\n\n")
+        note.append("  1. Get a free key at https://console.groq.com\n")
+        note.append("  2. Replace YOUR_KEY below and run:\n\n")
+        note.append("  mkdir -p ~/.config/notwisprflow && \\\n", style="bold")
+        note.append('  echo "YOUR_KEY" > ~/.config/notwisprflow/api_key && \\\n', style="bold")
+        note.append("  ./install.sh\n", style="bold")
+        console.print(Panel(note, width=60, border_style="yellow"))
+        answer = console.input("\n  Continue with offline mode? [Y/n] ")
+        if answer.lower() == "n":
+            console.print()
+            sys.exit(0)
+        console.print()
+
+    # ── Online mode without API key: cannot proceed ──
+    if transcription_mode == "online" and not has_api_key:
+        console.print()
+        msg = Text()
+        msg.append("Online mode requires a Groq API key.\n\n", style="bold red")
+        msg.append("  1. Get a free key at https://console.groq.com\n\n")
+        msg.append("  2. Add your key (pick one):\n\n")
+        msg.append("     Open ", style="dim")
+        msg.append("notwisprflow/config.py", style="dim bold")
+        msg.append(" and paste in:\n", style="dim")
+        msg.append('     GROQ_API_KEY = "your-key-here"\n\n', style="dim bold")
+        msg.append("     ── or run: ─────────────────────────────\n", style="dim")
+        msg.append("     mkdir -p ~/.config/notwisprflow && \\\n", style="dim")
+        msg.append('     echo "YOUR_KEY" > ~/.config/notwisprflow/api_key\n\n', style="dim")
+        msg.append("  3. Re-run ./install.sh")
+        console.print(Panel(msg, width=60, border_style="red"))
+        console.print()
+        sys.exit(1)
 
     # ── Step 5: Build & Install ──
     # Kill running app
@@ -109,13 +157,19 @@ def main():
         capture_output=True,
     )
 
-    # Offline mode: pre-download speech model during build so app is ready immediately.
-    # Auto mode: app downloads in background while using Groq — no install-time download.
-    # Online mode: no local model needed.
+    # Pre-download speech model when local transcription will be needed:
+    #   offline mode: always needs local model
+    #   auto mode + no API key: will fall back to local model immediately
+    #   auto mode + API key: app downloads in background — no install-time download
+    #   online mode: no local model needed
     model_proc = None
     model_cached = False
+    needs_local_model = (
+        transcription_mode == "offline"
+        or (transcription_mode == "auto" and not has_api_key)
+    )
 
-    if transcription_mode == "offline":
+    if needs_local_model:
         model_check = subprocess.run(
             [str(VENV_PYTHON), "-c",
              "from huggingface_hub import try_to_load_from_cache; "
@@ -142,7 +196,7 @@ def main():
         fail("Build & Install")
     step_ok("Build & Install", "/Applications")
 
-    if transcription_mode == "offline":
+    if needs_local_model:
         if model_cached:
             step_ok("Speech Model", "cached")
         elif model_proc:
