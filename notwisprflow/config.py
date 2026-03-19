@@ -4,138 +4,108 @@ Not Wispr Flow - User Configuration
 
 Edit these settings to customize your dictation experience.
 After changing settings, rebuild and reinstall:
-    ./scripts/install_service.sh
+    ./install.sh
 """
 
 from pynput.keyboard import Key
 
 # ============================================================================
-# WHISPER MODEL SELECTION
+# API KEYS
 # ============================================================================
-# Choose your Whisper model (affects speed vs accuracy tradeoff):
-#   "mlx-community/whisper-large-v3-turbo"  - Best quality, ~1.6GB, ~2.3GB RAM
-#   "mlx-community/whisper-small"           - Faster, ~500MB, ~2GB RAM (may hallucinate)
-#   "mlx-community/whisper-base"            - Fastest, ~150MB, ~1GB RAM (less accurate)
-#
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+# Keys can also be stored as files or env vars instead of hardcoding here:
+#   ~/.config/notwisprflow/api_key         (Groq)
+#   ~/.config/notwisprflow/gemini_api_key  (Gemini)
+#   GROQ_API_KEY / GEMINI_API_KEY env vars
 
-# LANGUAGE: Control which language(s) Whisper should transcribe
-#
-# Options:
-#   "en"     - English only (recommended - prevents hallucinations in other languages)
-#   None     - Auto-detect ANY language (for multilingual use: English + Spanish, etc.)
-#   "es"     - Spanish only
-#   "hi"     - Hindi only (outputs Devanagari script)
-#   "pa"     - Punjabi only (outputs Gurmukhi script)
-#   etc. (see Whisper docs for 99+ supported languages)
-#
-# IMPORTANT: Whisper does NOT support specifying multiple specific languages like ["en", "es"].
-# Your options are:
-#   1. Force ONE language: LANGUAGE = "en"  (ignores all other languages)
-#   2. Auto-detect ALL languages: LANGUAGE = None  (detects English, Spanish, Hindi, etc.)
-#
-# For English + Spanish dictation, use: LANGUAGE = None
-# This enables auto-detection and switches between languages automatically.
-#
-# NOTE: Forcing "en" on Hindi/Punjabi may produce romanized output (Hinglish) but results
-# are inconsistent. For reliable Hinglish, use language="hi" + transliteration library.
-#
-LANGUAGE = "en"
-
-# ============================================================================
-# HOTKEY CONFIGURATION
-# ============================================================================
-# HOTKEY_KEYS: The key(s) that trigger recording
-#
-# IMPORTANT: This is a Python set containing pynput Key objects. macOS may report
-# the same physical key with different codes (Key.ctrl vs Key.ctrl_r vs Key.ctrl_l).
-# Including multiple variants ensures reliable detection across different keyboards
-# and macOS versions.
-#
-# Common options:
-#   {Key.ctrl, Key.ctrl_r}           - Right Control (default, broadest compatibility)
-#   {Key.ctrl_r}                     - Right Control only (strict matching)
-#   {Key.ctrl, Key.ctrl_l}           - Left Control
-#   {Key.cmd_r, Key.cmd}             - Right Command (⌘)
-#   {Key.alt_r, Key.alt}             - Right Option/Alt
-#   {Key.f13}                        - F13 key
-#
-HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}
-
-# TOGGLE_KEY: Press this WITH the hotkey to enable toggle mode
-#
-# Toggle mode: Press Hotkey+Space to START recording, Hotkey alone to STOP
-# Hold mode: Hold Hotkey to record, release to stop (default behavior)
-#
-TOGGLE_KEY = Key.space
-
-# ============================================================================
-# TRANSCRIPTION BACKEND
-# ============================================================================
-# TRANSCRIPTION_MODE: Controls how audio is transcribed
-#   "auto"     - Try Groq API first, fall back to local MLX Whisper (default)
-#   "offline"  - Always use local MLX Whisper (100% offline, ~2.3GB RAM)
-#   "online"   - Always use Groq API (requires internet + API key, low RAM)
-#
-# Privacy: "online" and "auto" modes send audio to Groq's servers for transcription.
-# In "auto" mode without an API key, only local transcription is used.
-#
-TRANSCRIPTION_MODE = "auto"
-
-# GROQ_API_KEY: Required for "online" mode, optional for "auto" mode
-# Get a free key at https://console.groq.com
-#
-# Paste your key here, or save to ~/.config/notwisprflow/api_key, or set GROQ_API_KEY env var
+# Groq: https://console.groq.com (free tier: 20 req/min, 2000/day)
 GROQ_API_KEY = ""
 
-# GROQ_MODEL: Whisper model to use on Groq's API
-#
+# Gemini: https://aistudio.google.com/app/apikey
+GEMINI_API_KEY = ""
+
+
+
+# ============================================================================
+# TRANSCRIPTION
+# ============================================================================
+# "auto"    - Groq API first, local MLX Whisper fallback (default)
+# "online"  - Groq API only (requires GROQ_API_KEY)
+# "offline" - Local MLX Whisper only (no internet, ~2.3GB RAM)
+TRANSCRIPTION_MODE = "offline"
+
+# Language for Whisper transcription
+# "en" = English only (recommended), None = auto-detect all languages
+# For multilingual (e.g. English + Spanish), use None
+LANGUAGE = "en"
+
+# Local Whisper model (only used in offline/auto modes)
+# "mlx-community/whisper-large-v3-turbo" - Best quality, ~1.6GB download, ~2.3GB RAM
+# "mlx-community/whisper-small"          - Faster, ~500MB, ~2GB RAM
+# "mlx-community/whisper-base"           - Fastest, ~150MB, ~1GB RAM
+WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+
+# Groq API Whisper model (only used in online/auto modes)
 GROQ_MODEL = "whisper-large-v3"
 
 # ============================================================================
-# LLM POST-PROCESSING (Optional Enhancement)
+# HOTKEYS
 # ============================================================================
-# LLM-based text enhancement for transcriptions.
-# Adds ~0.5-2s latency but significantly improves quality.
+# Hold mode:   Hold hotkey to record, release to stop
+# Toggle mode: Hotkey + toggle key to start, hotkey alone to stop
 #
-# IMPORTANT: LLM processing requires internet connectivity
-# - In "offline" mode: LLM is automatically disabled (no online operations)
-# - In "online" mode: LLM runs if enabled and API key is present
-# - In "auto" mode: LLM runs when using Groq (online), skipped on local fallback
-#
-# Gemini API Key: Get a free key at https://aistudio.google.com/app/apikey
-# Paste your key here, or save to ~/.config/notwisprflow/gemini_api_key, or set GEMINI_API_KEY env var
-# Groq LLM: Reuses the same GROQ_API_KEY above
-GEMINI_API_KEY = ""
-#
-# To add/remove a model, edit only this dict. The menu bar and LLM processor
-# both read from here automatically.
-#
+# This is a set — include variants for compatibility across keyboards/macOS versions.
+# Examples: {Key.ctrl_r}, {Key.cmd_r, Key.cmd}, {Key.alt_r, Key.alt}, {Key.f13}
+HOTKEY_KEYS = {Key.ctrl, Key.ctrl_r}
+TOGGLE_KEY = Key.space
+
+# ============================================================================
+# LLM POST-PROCESSING
+# ============================================================================
+# Cleans up transcription text (capitalization, punctuation, filler words).
+# Adds ~0.5-2s latency. Only runs with online transcription, never offline.
+# Set LLM_MODEL to "disabled" to turn off. Changeable at runtime via menu bar.
+
+LLM_MODEL = "llama-3.3-70b-versatile"  # Must be a key from LLM_MODELS below
+LLM_TEMPERATURE = 0.3                  # 0.0 = consistent, 1.0 = creative
+
+
+# ============================================================================
+# BEHAVIOR
+# ============================================================================
+# Text insertion: False = clipboard paste (default, fast), True = type each char
+# Toggleable at runtime via menu bar "Paste Mode"
+USE_TYPE_MODE = False
+
+# Pause media (Spotify, YouTube, etc.) while recording, resume after transcription
+PAUSE_MEDIA_ON_RECORD = True
+
+# Verbose logging to ~/Library/Logs/NotWisprFlow/notwisprflow.log
+DEBUG = False
+
+
+
+
+
+
+
+
+
+# ============================================================================
+# MODEL & PROMPT REGISTRY (rarely needs editing)
+# ============================================================================
+# To add/remove an LLM model, edit this dict. Menu bar reads from here.
 LLM_MODELS = {
     "disabled": {"provider": None, "display": "Disabled", "group": None},
-    # Gemini models
+    # Gemini
     "gemini-2.5-flash": {"provider": "gemini", "display": "Gemini Flash (Fast)", "group": "Gemini"},
     "gemini-2.5-pro": {"provider": "gemini", "display": "Gemini Pro (Best)", "group": "Gemini"},
-    # Groq LLM models (uses same API key as Whisper transcription)
+    # Groq (uses same API key as Whisper transcription)
     "llama-3.3-70b-versatile": {"provider": "groq", "display": "Groq Llama 3.3 70B (Best)", "group": "Groq"},
     "llama-3.1-8b-instant": {"provider": "groq", "display": "Groq Llama 3.1 8B (Fastest)", "group": "Groq"},
 }
 
-# LLM_MODEL: Default model selection (must be a key from LLM_MODELS above)
-# Set to "disabled" to turn off LLM processing entirely.
-# Can be changed at runtime via the menu bar "LLM Model" submenu.
-LLM_MODEL = "llama-3.3-70b-versatile"
-
-# LLM_TEMPERATURE: Controls creativity vs consistency (0.0-1.0)
-# Lower = more consistent corrections, higher = more creative rewrites
-LLM_TEMPERATURE = 0.3
-
-# LLM_PROMPTS: Prompt presets for text enhancement.
-# To add/remove a prompt style, edit only this dict.
-# Each entry needs: display (menu label), system_with_context and system_no_context
-# (system prompts), user_with_context and user_no_context (user prompt templates).
+# To add/remove a prompt style, edit this dict.
 # Templates use {transcription}, {context_before}, {context_after} placeholders.
-#
 LLM_PROMPTS = {
     "detailed": {
         "display": "Detailed",
@@ -179,7 +149,7 @@ Rules:
 - Match punctuation style of surrounding text
 - If the insertion connects two sentence fragments, ensure final output flows naturally \
 into TEXT_AFTER_CURSOR
-- If the words "Whisper Flow" or "Whisperflow" (doesn't matter, upper case or lower case) appear in the transcription, convert the words to "Wispr Flow". Similarly "not Whisper Flow" -> "Not Wispr Flow". This is the name of my product, so treat it as a proper noun. 
+- If the words "Whisper Flow" or "Whisperflow" (doesn't matter, upper case or lower case) appear in the transcription, convert the words to "Wispr Flow". Similarly "not Whisper Flow" -> "Not Wispr Flow". This is the name of my product, so treat it as a proper noun.
 
 Formatting:
 - Sequential lists: If the speaker uses "first...second...third" OR "one...two...three" AND lists 2+ distinct items, format that part of speech as a list:
@@ -199,7 +169,7 @@ You are a deterministic text cleanup engine.
 Your task is to clean raw speech-to-text transcription.
 Preserve original wording and meaning. This is not a rewriting task.
 
-IMPORTANT:The transcription you receive comes from a speech-to-text model (Whisper). 
+IMPORTANT:The transcription you receive comes from a speech-to-text model (Whisper).
 The punctuation, capitalization, and spacing in the RAW_TRANSCRIPTION reflect how the speaker actually spoke:
 - Hyphens/dashes might mean the speaker said words as a single connected unit
 - If the user says "bracket" or "dash", they might mean a they want to add a literal bracket or dash, not a mistake by the model
@@ -226,7 +196,7 @@ You must:
 
 Rules:
 - If the speaker corrects themselves (e.g., "5 — no, 6"), keep only the corrected value
-- If the words "Whisper Flow" or "Whisperflow" (doesn't matter, upper case or lower case) appear in the transcription, convert the words to "Wispr Flow". Similarly "not Whisper Flow" -> "Not Wispr Flow". This is the name of my product, so treat it as a proper noun. 
+- If the words "Whisper Flow" or "Whisperflow" (doesn't matter, upper case or lower case) appear in the transcription, convert the words to "Wispr Flow". Similarly "not Whisper Flow" -> "Not Wispr Flow". This is the name of my product, so treat it as a proper noun.
 
 Formatting:
 - Sequential lists: If the speaker uses "first...second...third" OR "one...two...three" AND lists 2+ distinct items, format that part of speech as a list:
@@ -256,37 +226,4 @@ Output only the cleaned text.""",
     },
 }
 
-# LLM_PROMPT: Default prompt style (must be a key from LLM_PROMPTS above)
-# Can be changed at runtime via the menu bar "LLM Prompt" submenu.
-LLM_PROMPT = "detailed"
-
-# ============================================================================
-# TEXT INSERTION MODE
-# ============================================================================
-# Controls how transcribed text is inserted at the cursor position
-#   False - Use clipboard paste (default, instant, unicode-safe)
-#   True  - Use character-by-character typing (slower, avoids clipboard)
-#
-# Paste mode (False): Faster and more reliable, handles all unicode characters,
-#                     but briefly modifies clipboard (restored immediately)
-# Type mode (True):   Slower, types each character individually, doesn't touch
-#                     clipboard, may have issues with complex unicode
-#
-# You can toggle between modes at runtime via the menu bar "Paste Mode" item
-USE_TYPE_MODE = False
-
-# ============================================================================
-# PAUSE MEDIA DURING RECORDING
-# ============================================================================
-# Automatically pause media (Spotify, Apple Music) when recording starts,
-# and resume when transcription completes.
-#
-PAUSE_MEDIA_ON_RECORD = True
-
-# ============================================================================
-# DEBUGGING
-# ============================================================================
-# Enable verbose logging (writes to ~/Library/Logs/NotWisprFlow/notwisprflow.log)
-# Set to True if experiencing issues, then check logs for detailed diagnostics.
-#
-DEBUG = False
+LLM_PROMPT = "detailed" 
