@@ -13,15 +13,23 @@ from pynput.keyboard import Key
 # API KEYS
 # ============================================================================
 # Keys can also be stored as files or env vars instead of hardcoding here:
-#   ~/.config/notwisprflow/api_key         (Groq)
-#   ~/.config/notwisprflow/gemini_api_key  (Gemini)
-#   GROQ_API_KEY / GEMINI_API_KEY env vars
+#   ~/.config/notwisprflow/api_key            (Groq)
+#   ~/.config/notwisprflow/gemini_api_key     (Gemini)
+#   ~/.config/notwisprflow/openai_api_key     (OpenAI)
+#   ~/.config/notwisprflow/anthropic_api_key  (Anthropic)
+#   GROQ_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY env vars
 
 # Groq: https://console.groq.com (free tier: 20 req/min, 2000/day)
 GROQ_API_KEY = ""
 
 # Gemini: https://aistudio.google.com/app/apikey
 GEMINI_API_KEY = ""
+
+# OpenAI: https://platform.openai.com/api-keys
+OPENAI_API_KEY = ""
+
+# Anthropic: https://console.anthropic.com/settings/keys
+ANTHROPIC_API_KEY = ""
 
 
 
@@ -102,6 +110,12 @@ LLM_MODELS = {
     # Groq (uses same API key as Whisper transcription)
     "llama-3.3-70b-versatile": {"provider": "groq", "display": "Groq Llama 3.3 70B (Best)", "group": "Groq"},
     "llama-3.1-8b-instant": {"provider": "groq", "display": "Groq Llama 3.1 8B (Fastest)", "group": "Groq"},
+    # OpenAI
+    "gpt-4o-mini": {"provider": "openai", "display": "GPT-4o Mini (Fast)", "group": "OpenAI"},
+    "gpt-4o": {"provider": "openai", "display": "GPT-4o (Best)", "group": "OpenAI"},
+    # Anthropic
+    "claude-haiku-4-5-20251001": {"provider": "anthropic", "display": "Claude Haiku 4.5 (Fast)", "group": "Anthropic"},
+    "claude-sonnet-4-5-20250929": {"provider": "anthropic", "display": "Claude Sonnet 4.5 (Best)", "group": "Anthropic"},
 }
 
 # To add/remove a prompt style, edit this dict.

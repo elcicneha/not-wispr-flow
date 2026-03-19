@@ -83,7 +83,8 @@ from notwisprflow.config import (HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, 
                     TRANSCRIPTION_MODE, GROQ_MODEL, GROQ_API_KEY,
                     LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
                     LLM_PROMPT, USE_TYPE_MODE,
-                    PAUSE_MEDIA_ON_RECORD, GEMINI_API_KEY)
+                    PAUSE_MEDIA_ON_RECORD, GEMINI_API_KEY,
+                    OPENAI_API_KEY, ANTHROPIC_API_KEY)
 from notwisprflow.transcription import TranscriptionManager
 from notwisprflow.llm_processor import LLMProcessor, load_preference, save_preference
 from notwisprflow.media_control import pause_media, resume_media
@@ -1807,9 +1808,16 @@ def setup_menu_bar(shutdown_event):
     llm_model_items = {}
     current_model = state.llm_model
 
+    # Only show models whose provider has a valid API key
+    available_providers = state.llm_processor.get_available_providers() if state.llm_processor else {None}
+
     # Build submenu grouped by "group" field, with separators between groups
     last_group = "FIRST"  # sentinel to track group transitions
     for model_name, model_info in LLM_MODELS.items():
+        provider = model_info.get("provider")
+        if provider not in available_providers:
+            continue  # Skip models without API keys
+
         group = model_info.get("group")
         # Add separator between different groups
         if group != last_group and last_group != "FIRST":

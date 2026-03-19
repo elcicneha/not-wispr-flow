@@ -86,6 +86,8 @@ OPTIONS = {
         'onnxruntime',        # ONNX runtime for VAD (replaces torch)
         'certifi',            # CA certificates for SSL in bundled app
         'groq',               # Groq API client for cloud transcription
+        'openai',             # OpenAI API client for LLM post-processing
+        'anthropic',          # Anthropic API client for LLM post-processing
         'pydantic',           # Required by google-genai
         'ApplicationServices',
         'notwisprflow',       # App's own package (config, transcription, etc.)

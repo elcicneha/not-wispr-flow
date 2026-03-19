@@ -14,7 +14,7 @@ import os
 import time
 from typing import Optional, Tuple
 
-from .config import LLM_MODELS, LLM_PROMPTS, GEMINI_API_KEY, GROQ_API_KEY
+from .config import LLM_MODELS, LLM_PROMPTS, GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY
 
 # ============================================================================
 # PREFERENCES PERSISTENCE
@@ -66,6 +66,18 @@ PROVIDER_USAGE_CONFIG = {
         "output_field": "completion_tokens",
         "daily_request_limit": 500,
     },
+    "openai": {
+        "usage_attr": "usage",
+        "input_field": "prompt_tokens",
+        "output_field": "completion_tokens",
+        "daily_request_limit": None,
+    },
+    "anthropic": {
+        "usage_attr": "usage",
+        "input_field": "input_tokens",
+        "output_field": "output_tokens",
+        "daily_request_limit": None,
+    },
 }
 
 
@@ -92,13 +104,17 @@ class LLMProcessor:
         self._prompt_name = prompt
         self._prompt_config = LLM_PROMPTS.get(prompt, {})
 
-        # Resolve API keys for both providers at init (so switching is instant)
+        # Resolve API keys for all providers at init (so switching is instant)
         self._gemini_api_key = self._resolve_gemini_api_key(logger)
         self._groq_api_key = self._resolve_groq_api_key(logger)
+        self._openai_api_key = self._resolve_openai_api_key(logger)
+        self._anthropic_api_key = self._resolve_anthropic_api_key(logger)
 
         # Lazy-initialized clients (one per provider)
         self._gemini_client = None
         self._groq_client = None
+        self._openai_client = None
+        self._anthropic_client = None
 
         # Usage tracking (per-provider)
         self._daily_requests = 0
@@ -153,6 +169,20 @@ class LLMProcessor:
                 self.logger.warning(
                     "LLM model requires Groq API key but none found. "
                     "Set GROQ_API_KEY env var or save to ~/.config/notwisprflow/api_key"
+                )
+        elif self._provider == "openai" and not self._openai_api_key:
+            self.enabled = False
+            if log:
+                self.logger.warning(
+                    "LLM model requires OpenAI API key but none found. "
+                    "Set OPENAI_API_KEY env var or save to ~/.config/notwisprflow/openai_api_key"
+                )
+        elif self._provider == "anthropic" and not self._anthropic_api_key:
+            self.enabled = False
+            if log:
+                self.logger.warning(
+                    "LLM model requires Anthropic API key but none found. "
+                    "Set ANTHROPIC_API_KEY env var or save to ~/.config/notwisprflow/anthropic_api_key"
                 )
         else:
             self.enabled = True
@@ -222,6 +252,23 @@ class LLMProcessor:
     def prompt_name(self) -> str:
         return self._prompt_name
 
+    def get_available_providers(self) -> set:
+        """Return set of provider names that have valid API keys.
+
+        Used by the menu bar to only show models whose provider has an API key.
+        None is always included (for the 'disabled' entry).
+        """
+        available = {None}
+        if self._gemini_api_key:
+            available.add("gemini")
+        if self._groq_api_key:
+            available.add("groq")
+        if self._openai_api_key:
+            available.add("openai")
+        if self._anthropic_api_key:
+            available.add("anthropic")
+        return available
+
     @staticmethod
     def _resolve_gemini_api_key(logger) -> str:
         """Resolve Gemini API key from config.py → env var → dotfile."""
@@ -272,6 +319,56 @@ class LLMProcessor:
 
         return ""
 
+    @staticmethod
+    def _resolve_openai_api_key(logger) -> str:
+        """Resolve OpenAI API key from config.py → env var → dotfile."""
+        if OPENAI_API_KEY:
+            logger.debug("OpenAI API key: found in config.py")
+            return OPENAI_API_KEY
+
+        env_key = os.environ.get("OPENAI_API_KEY", "")
+        if env_key:
+            logger.debug("OpenAI API key: found in environment variable")
+            return env_key
+
+        key_file = os.path.expanduser("~/.config/notwisprflow/openai_api_key")
+        if os.path.exists(key_file):
+            try:
+                with open(key_file, "r") as f:
+                    key = f.read().strip()
+                if key:
+                    logger.debug(f"OpenAI API key: found in {key_file}")
+                    return key
+            except Exception as e:
+                logger.warning(f"Failed to read OpenAI API key from {key_file}: {e}")
+
+        return ""
+
+    @staticmethod
+    def _resolve_anthropic_api_key(logger) -> str:
+        """Resolve Anthropic API key from config.py → env var → dotfile."""
+        if ANTHROPIC_API_KEY:
+            logger.debug("Anthropic API key: found in config.py")
+            return ANTHROPIC_API_KEY
+
+        env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if env_key:
+            logger.debug("Anthropic API key: found in environment variable")
+            return env_key
+
+        key_file = os.path.expanduser("~/.config/notwisprflow/anthropic_api_key")
+        if os.path.exists(key_file):
+            try:
+                with open(key_file, "r") as f:
+                    key = f.read().strip()
+                if key:
+                    logger.debug(f"Anthropic API key: found in {key_file}")
+                    return key
+            except Exception as e:
+                logger.warning(f"Failed to read Anthropic API key from {key_file}: {e}")
+
+        return ""
+
     # ── Client initialization ──────────────────────────────────────────────
 
     def _get_gemini_client(self):
@@ -301,6 +398,34 @@ class LLMProcessor:
                 self.logger.error(f"Traceback: {traceback.format_exc()}")
                 self.enabled = False
         return self._groq_client
+
+    def _get_openai_client(self):
+        """Lazy initialization of OpenAI client."""
+        if self._openai_client is None and self._openai_api_key:
+            try:
+                from openai import OpenAI
+                self._openai_client = OpenAI(api_key=self._openai_api_key, timeout=10.0)
+                self.logger.debug(f"OpenAI LLM client initialized: {self._model}")
+            except Exception as e:
+                import traceback
+                self.logger.error(f"Failed to initialize OpenAI client: {e}")
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
+                self.enabled = False
+        return self._openai_client
+
+    def _get_anthropic_client(self):
+        """Lazy initialization of Anthropic client."""
+        if self._anthropic_client is None and self._anthropic_api_key:
+            try:
+                import anthropic
+                self._anthropic_client = anthropic.Anthropic(api_key=self._anthropic_api_key, timeout=10.0)
+                self.logger.debug(f"Anthropic LLM client initialized: {self._model}")
+            except Exception as e:
+                import traceback
+                self.logger.error(f"Failed to initialize Anthropic client: {e}")
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
+                self.enabled = False
+        return self._anthropic_client
 
     # ── Processing ─────────────────────────────────────────────────────────
 
@@ -332,6 +457,10 @@ class LLMProcessor:
                 processed_text, response = self._process_gemini(text, context_before, context_after)
             elif self._provider == "groq":
                 processed_text, response = self._process_groq(text, context_before, context_after)
+            elif self._provider == "openai":
+                processed_text, response = self._process_openai(text, context_before, context_after)
+            elif self._provider == "anthropic":
+                processed_text, response = self._process_anthropic(text, context_before, context_after)
             else:
                 return text, 0.0
 
@@ -404,6 +533,51 @@ class LLMProcessor:
         )
 
         return response.choices[0].message.content.strip(), response
+
+    def _process_openai(self, text: str, context_before: Optional[str],
+                        context_after: Optional[str]) -> Tuple[str, object]:
+        """Call OpenAI chat completions API for text enhancement."""
+        client = self._get_openai_client()
+        if client is None:
+            return text, None
+
+        has_context = self._has_context(context_before, context_after)
+        user_prompt = self._build_user_prompt(text, context_before, context_after, has_context)
+        system_prompt = self._get_system_prompt(has_context)
+
+        response = client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=self._temperature,
+        )
+
+        return response.choices[0].message.content.strip(), response
+
+    def _process_anthropic(self, text: str, context_before: Optional[str],
+                           context_after: Optional[str]) -> Tuple[str, object]:
+        """Call Anthropic messages API for text enhancement."""
+        client = self._get_anthropic_client()
+        if client is None:
+            return text, None
+
+        has_context = self._has_context(context_before, context_after)
+        user_prompt = self._build_user_prompt(text, context_before, context_after, has_context)
+        system_prompt = self._get_system_prompt(has_context)
+
+        response = client.messages.create(
+            model=self._model,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=self._temperature,
+        )
+
+        return response.content[0].text.strip(), response
 
     # ── Prompt building ────────────────────────────────────────────────────
 
