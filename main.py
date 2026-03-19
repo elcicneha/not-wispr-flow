@@ -53,7 +53,7 @@ from notwisprflow.config import (
     HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
     TRANSCRIPTION_MODE, GROQ_MODEL, GROQ_API_KEY,
     LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
-    LLM_PROMPT, USE_TYPE_MODE,
+    LLM_PROMPT, USE_TYPE_MODE, START_AT_LOGIN,
 )
 from notwisprflow.constants import SAMPLE_RATE
 from notwisprflow.transcription import TranscriptionManager
@@ -61,6 +61,7 @@ from notwisprflow.llm_processor import LLMProcessor
 from notwisprflow.media_control import resume_media
 from notwisprflow.post_processing import post_process
 from notwisprflow.preferences import load_preference
+from notwisprflow.startup import is_login_item_installed, install_login_item
 from notwisprflow import menubar, audio, keyboard_handler
 from notwisprflow.permissions import test_microphone_access, check_accessibility_permission
 from notwisprflow.text_output import insert_text, get_cursor_context
@@ -415,6 +416,10 @@ def main():
     atexit.register(lambda: pid_lock.close())
 
     logger.info("--- Not Wispr Flow starting ---")
+
+    # Install login item on first run if config says so
+    if START_AT_LOGIN and not is_login_item_installed():
+        install_login_item()
 
     # Check permissions
     if not test_microphone_access():

@@ -87,6 +87,10 @@ USE_TYPE_MODE = False
 # Pause media (Spotify, YouTube, etc.) while recording, resume after transcription
 PAUSE_MEDIA_ON_RECORD = True
 
+# Start app automatically when you log in (creates a macOS LaunchAgent)
+# Toggleable at runtime via menu bar "Start at Login"
+START_AT_LOGIN = True
+
 # Verbose logging to ~/Library/Logs/NotWisprFlow/notwisprflow.log
 DEBUG = False
 

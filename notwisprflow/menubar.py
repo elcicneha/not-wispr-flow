@@ -27,6 +27,7 @@ from Foundation import NSMakeRect
 
 from .config import LLM_MODELS
 from .preferences import save_preference
+from .startup import is_login_item_installed, install_login_item, uninstall_login_item
 from .text_output import type_chunked
 
 logger = logging.getLogger("notwisprflow")
@@ -410,6 +411,7 @@ class MenuDelegate(NSObject):
     """Handles all menu bar actions."""
     shutdown_event = None
     paste_mode_item = None
+    start_at_login_item = None
     llm_model_items = None
     personal_prompt_item = None
     status_item = None
@@ -620,6 +622,16 @@ class MenuDelegate(NSObject):
                     "Personal Prompt (Active)" if has_active else "Personal Prompt..."
                 )
 
+    def toggleStartAtLogin_(self, sender):
+        enabled = not is_login_item_installed()
+        if enabled:
+            install_login_item()
+        else:
+            uninstall_login_item()
+        if self.start_at_login_item:
+            self.start_at_login_item.setState_(NSOnState if enabled else NSOffState)
+        logger.debug(f"Start at Login: {'ON' if enabled else 'OFF'}")
+
     def openLogs_(self, sender):
         log_dir = Path.home() / 'Library' / 'Logs' / 'NotWisprFlow'
         log_file = log_dir / 'notwisprflow.log'
@@ -758,6 +770,15 @@ def setup_menu_bar(shutdown_event, state):
     sep2 = NSMenuItem.separatorItem()
     menu.addItem_(sep2)
     hideable_items.append(sep2)
+
+    # Start at Login toggle
+    start_at_login_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Start at Login", "toggleStartAtLogin:", ""
+    )
+    start_at_login_item.setTarget_(delegate)
+    start_at_login_item.setState_(NSOnState if is_login_item_installed() else NSOffState)
+    delegate.start_at_login_item = start_at_login_item
+    menu.addItem_(start_at_login_item)
 
     # Open Logs
     logs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
