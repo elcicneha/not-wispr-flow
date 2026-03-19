@@ -92,10 +92,6 @@ class LLMProcessor:
         # Personal prompt (additional instructions appended to system prompt)
         self._personal_prompt = load_preference("personal_prompt", "")
 
-        # Custom system prompt overrides (per-variant, replace preset when set)
-        self._custom_system_with_context = load_preference("custom_system_with_context", "")
-        self._custom_system_no_context = load_preference("custom_system_no_context", "")
-
         # Set initial model (also sets self._provider, self.enabled)
         self._model = None
         self._provider = None
@@ -177,39 +173,6 @@ class LLMProcessor:
             self.logger.debug(f"Personal prompt set ({len(self._personal_prompt)} chars)")
         else:
             self.logger.debug("Personal prompt cleared")
-
-    def set_custom_system_prompt(self, variant: str, text: str):
-        """Set a custom system prompt override for a specific variant."""
-        text = text.strip()
-        if variant == "with_context":
-            self._custom_system_with_context = text
-            save_preference("custom_system_with_context", text)
-        elif variant == "no_context":
-            self._custom_system_no_context = text
-            save_preference("custom_system_no_context", text)
-        status = f"set ({len(text)} chars)" if text else "cleared"
-        self.logger.debug(f"Custom system prompt ({variant}): {status}")
-
-    def has_custom_system_prompt(self, variant: str) -> bool:
-        if variant == "with_context":
-            return bool(self._custom_system_with_context)
-        return bool(self._custom_system_no_context)
-
-    def reset_custom_system_prompt(self, variant: str):
-        """Clear custom system prompt override, reverting to preset."""
-        self.set_custom_system_prompt(variant, "")
-
-    def get_active_system_prompt(self, has_context: bool) -> str:
-        """Get the active system prompt WITHOUT personal prompt appended (for UI display)."""
-        if has_context:
-            return self._custom_system_with_context or self._prompt_config.get("system_with_context", "")
-        return self._custom_system_no_context or self._prompt_config.get("system_no_context", "")
-
-    def get_preset_system_prompt(self, has_context: bool) -> str:
-        """Get the preset default system prompt (ignoring any custom override)."""
-        if has_context:
-            return self._prompt_config.get("system_with_context", "")
-        return self._prompt_config.get("system_no_context", "")
 
     @property
     def model(self) -> str:
@@ -466,9 +429,9 @@ class LLMProcessor:
     def _get_system_prompt(self, has_context: bool) -> str:
         """Get the appropriate system prompt based on whether context is available."""
         if has_context:
-            prompt = self._custom_system_with_context or self._prompt_config.get("system_with_context", "")
+            prompt = self._prompt_config.get("system_with_context", "")
         else:
-            prompt = self._custom_system_no_context or self._prompt_config.get("system_no_context", "")
+            prompt = self._prompt_config.get("system_no_context", "")
         if self._personal_prompt:
             prompt += "\n\nAdditional instructions:\n" + self._personal_prompt
         return prompt
