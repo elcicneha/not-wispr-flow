@@ -2,15 +2,15 @@
 
 ![Social Preview](resources/icons/social%20preview%20card.png)
 
-![Demo](resources/icons/NotWisprFlowDemo.gif)
-
 Free, offline voice-to-text for **macOS**. Hold a key, speak, release — your words appear wherever your cursor is. Runs as a menu bar app, works system-wide in any app.
 
 Everything runs on your machine by default. No cloud, no subscription, no data leaving your computer. Uses OpenAI's Whisper model through Apple's MLX framework, running on your Mac's GPU.
 
-Optionally, add free API keys for faster cloud transcription (Groq) and AI text enhancement (Gemini/Groq LLM) — falls back to offline automatically if your internet drops.
+Optionally, add API keys for faster cloud transcription (Groq) and AI text enhancement (Groq Llama, Gemini, OpenAI, or Anthropic) — falls back to offline automatically if your internet drops.
 
 **You'll need:** Mac with Apple Silicon (M1/M2/M3/M4) • If running offline: ~1-3GB RAM depending on your model choice.
+
+![Demo](resources/icons/NotWisprFlowDemo.gif)
 
 ## About this project
 
@@ -18,7 +18,7 @@ Inspired by [Wispr Flow](https://wisprflow.ai/). They've built something genuine
 
 But this gets the job done for free and runs entirely on your machine (if privacy is what you need). The tradeoff? It'll use some of your RAM (~2-3GB) since the AI model stays in memory while running.
 
-## Installation
+## Installation (Option 1: MacOS app)
 
 ### 1. Download
 
@@ -26,7 +26,7 @@ Click the green **Code** button above → **Download ZIP**. Unzip it wherever yo
 
 ### 2. Install
 
-Open the `not-wispr-flow` folder in Finder → right-click → **New Terminal at Folder**
+In Finder, right-click the downloaded `not-wispr-flow` folder → **New Terminal at Folder**
 
 Then paste:
 ```bash
@@ -35,7 +35,7 @@ Then paste:
 
 That's it. The script handles everything: installs Python if needed, downloads packages, creates a signing certificate, builds the app, and installs it to Applications.
 
-**It will ask for your Mac password once** — this creates a local code signing certificate so permissions persist across updates.
+**It will ask for your Mac password once** — this creates a local code-signing certificate so macOS remembers your permissions across updates. Everything stays on your Mac, nothing is sent anywhere.
 
 Takes about 5-10 minutes on first run. Re-runs are faster (skips steps already done).
 
@@ -50,22 +50,13 @@ System Settings → Privacy & Security → give **"Not Wispr Flow"** access to:
 - Accessibility
 - Input Monitoring
 
-Permissions persist across updates — you only do this once.
+Permissions persist across updates — you only need to do this once.
 
----
-
-### Updating
-
-Download the latest ZIP (or `git pull` if you cloned), then re-run:
-```bash
-./install.sh
-```
-
-### Alternative: Run in Terminal
+## Alternative: Run in Terminal (Option 2)
 
 If you just want to try it out without installing the app, you can run it directly. You'll need Python 3.10+ installed.
 
-Open the `not-wispr-flow` folder in Finder → right-click → **New Terminal at Folder**
+In Finder, right-click the downloaded `not-wispr-flow` folder → **New Terminal at Folder**
 
 ```bash
 python3 -m venv venv
@@ -76,7 +67,7 @@ python3 main.py
 
 Keep Terminal open while using it. Press `Ctrl+C` to stop. Permissions go to **Terminal** instead of the app.
 
-### Uninstall
+## Uninstall
 
 ```bash
 ./uninstall.sh
@@ -105,64 +96,51 @@ You'll see a menu bar icon at the top of your screen when it's running.
 
 Out of the box, everything runs offline on your Mac. API keys unlock faster transcription and AI text enhancement.
 
-### Groq API Key — Transcription + LLM
+### Supported Providers
 
-This is the main API key. It does two things:
-- **Faster transcription** — uses Groq's cloud Whisper instead of running locally. Less RAM, faster results. Falls back to offline automatically if your internet drops.
-- **LLM text cleanup** — uses Groq's Llama models to fix punctuation, capitalization, filler words, and self-corrections. Free, fast, and good enough for most use.
+| Provider | Used for | Free tier | Get a key |
+|----------|----------|-----------|-----------|
+| **Groq** | Cloud transcription (Whisper) + LLM cleanup (Llama) | Yes (generous) | [console.groq.com](https://console.groq.com) |
+| **Gemini** | LLM text cleanup | Yes (generous) | [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) |
+| **OpenAI** | LLM text cleanup (GPT-4o) | No (paid) | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Anthropic** | LLM text cleanup (Claude) | No (paid) | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 
-1. Go to [console.groq.com](https://console.groq.com) and create a free account
-2. Generate an API key
-3. Save the key — two options:
+**Groq is the main key** — It gives you faster online transcription. For LLM post-processing you have all the other options. You can select the LLM model you wanna use from the menubar, or add your own options in [config.py](notwisprflow/config.py). 
 
-   **Option A — Paste in config.py** (quick and simple, good for personal use)
+### Adding an API Key
 
-   Open [config.py](notwisprflow/config.py), find `GROQ_API_KEY`, paste your key there.
+**Option A — Paste in config.py** (quick and simple, good for personal use)
 
-   **Option B — Save to a file** (keeps your key separate from the code, safer if you share or push your code)
-   ```bash
-   mkdir -p ~/.config/notwisprflow
-   echo "your-api-key" > ~/.config/notwisprflow/api_key
-   ```
+Open [config.py](notwisprflow/config.py), find the relevant `*_API_KEY` line, paste your key there.
 
-4. Restart the app
+Then repeat the installation step, re-install using `./install.sh` in Terminal.
+
+**Option B — Save to a file** (safer if you plan to share your code)
+
+1. Open Terminal and run: `mkdir -p ~/.config/notwisprflow`
+2. Then run **one** of these (paste your real key between the quotes):
+   - **Groq:** `echo "YOUR-KEY-HERE" > ~/.config/notwisprflow/api_key`
+   - **Gemini:** `echo "YOUR-KEY-HERE" > ~/.config/notwisprflow/gemini_api_key`
+   - **OpenAI:** `echo "YOUR-KEY-HERE" > ~/.config/notwisprflow/openai_api_key`
+   - **Anthropic:** `echo "YOUR-KEY-HERE" > ~/.config/notwisprflow/anthropic_api_key`
+3. Restart the app. (no need to re-install)
 
 **Don't want online transcription at all?** Set `TRANSCRIPTION_MODE = "offline"` in [config.py](notwisprflow/config.py).
 
-### Gemini API Key — Better LLM (Optional)
-
-If you want higher quality text cleanup, you can add a Gemini key. Gemini models are smarter than Llama but a bit slower. This is completely optional — the Groq Llama models above work well for most people.
-
-1. Go to [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) and create a free key
-2. Save the key — two options:
-
-   **Option A — Paste in config.py** (quick and simple, good for personal use)
-
-   Open [config.py](notwisprflow/config.py), find `GEMINI_API_KEY`, paste your key there.
-
-   **Option B — Save to a file** (keeps your key separate from the code, safer if you share or push your code)
-   ```bash
-   mkdir -p ~/.config/notwisprflow
-   echo "your-api-key" > ~/.config/notwisprflow/gemini_api_key
-   ```
-
-3. Restart the app
-4. Switch to a Gemini model: in [config.py](notwisprflow/config.py), set `LLM_MODEL` to `"gemini-2.5-flash"` or `"gemini-2.5-pro"` (or change it from the menu bar under LLM Model)
-
-LLM only runs when using online transcription (Groq). It's automatically skipped during offline/local transcription.
+LLM text cleanup only runs when using online transcription (Groq). It's automatically skipped during offline/local transcription.
 
 ---
 
 ## Menu Bar
 
-The menu bar icon shows the app state: idle, recording (animated), or processing (animated).
+The menu bar icon shows the app state: idle, recording, or processing.
 
 | Menu Item | What it does |
 |-----------|-------------|
 | **Retype last transcript** | Types the last transcription again (Ctrl+Cmd+C) |
 | **Paste Mode** | Toggle between clipboard paste (default) and character-by-character typing |
-| **LLM Model** | Switch between LLM models (Gemini Flash, Gemini Pro, Groq Llama, or Disabled) |
-| **Prompts...** | Edit personal prompt — additional instructions for the LLM, plus system prompt overrides |
+| **LLM Model** | Switch between LLM models — only shows providers with a valid API key |
+| **Personal Prompt...** | Edit personal prompt — additional instructions for the LLM |
 | **Open Logs** | Opens the log file in your default text editor |
 | **Quit** | Stops the app (Cmd+Q) |
 
@@ -184,12 +162,19 @@ Want to change things up? Edit [config.py](notwisprflow/config.py) in any text e
 - Option key — `{Key.alt, Key.alt_r}`
 - Or F13, etc.
 
-**LLM models** (in `LLM_MODELS` dict):
-- `gemini-2.5-flash` — Fast Gemini model (requires Gemini API key)
-- `gemini-2.5-pro` — Best Gemini model (requires Gemini API key)
-- `llama-3.3-70b-versatile` — Best Groq LLM (reuses Groq API key)
-- `llama-3.1-8b-instant` — Fastest Groq LLM (reuses Groq API key)
-- `disabled` — No LLM processing
+**LLM models** (in `LLM_MODELS` dict — menu bar only shows models with a valid API key):
+
+| Model | Provider | API Key |
+|-------|----------|---------|
+| `gemini-2.5-flash` | Gemini (Fast) | Gemini |
+| `gemini-2.5-pro` | Gemini (Best) | Gemini |
+| `llama-3.3-70b-versatile` | Groq Llama (Best) | Groq |
+| `llama-3.1-8b-instant` | Groq Llama (Fastest) | Groq |
+| `gpt-4o-mini` | OpenAI (Fast) | OpenAI |
+| `gpt-4o` | OpenAI (Best) | OpenAI |
+| `claude-haiku-4-5-20251001` | Anthropic (Fast) | Anthropic |
+| `claude-sonnet-4-5-20250929` | Anthropic (Best) | Anthropic |
+| `disabled` | None | — |
 
 **After making changes:**
 - If you installed as an app: Run `./install.sh` to rebuild

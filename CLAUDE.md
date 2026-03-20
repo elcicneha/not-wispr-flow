@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Not Wispr Flow is a macOS voice dictation tool providing system-wide speech-to-text with hybrid online/offline support. It uses Groq API for fast cloud transcription when available, with local MLX Whisper as a fallback. Silero VAD handles silence detection. It runs as a background menu bar app with two recording modes:
 
-- **Press-and-Hold**: Hold Right Control to record, release to transcribe
-- **Toggle Mode**: Press Right Control + Space to start recording, Right Control to stop
+- **Press-and-Hold**: Hold Control to record, release to transcribe
+- **Toggle Mode**: Press Control + Space to start recording, Control to stop
 
 ## Development Commands
 
