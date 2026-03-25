@@ -17,7 +17,7 @@ from pynput.keyboard import Key
 
 from .config import HOTKEY_KEYS, TOGGLE_KEY
 from . import audio
-from .text_output import type_chunked
+from .text_output import insert_text
 
 logger = logging.getLogger("notwisprflow")
 
@@ -156,8 +156,8 @@ def create_handlers(state, update_icon_fn, on_audio_ready_fn):
                         logger.debug("Cancelled recording for Retype shortcut")
                     text = state.last_transcription
                     if text:
-                        threading.Thread(target=type_chunked, args=(text,), daemon=True).start()
-                        logger.debug("Retype: typing last transcription via global shortcut")
+                        threading.Thread(target=insert_text, args=(text, state), daemon=True).start()
+                        logger.debug("Retype: inserting last transcription via global shortcut")
 
         except Exception as e:
             logger.error(f"Error in on_press handler: {e}")

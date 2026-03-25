@@ -28,7 +28,7 @@ from Foundation import NSMakeRect
 from .config import LLM_MODELS
 from .preferences import save_preference
 from .startup import is_login_item_installed, install_login_item, uninstall_login_item
-from .text_output import type_chunked
+from .text_output import insert_text
 
 logger = logging.getLogger("notwisprflow")
 
@@ -315,6 +315,7 @@ class MenuDelegate(NSObject):
     """Handles all menu bar actions."""
     shutdown_event = None
     paste_mode_item = None
+    retype_item = None
     start_at_login_item = None
     llm_model_items = None
     personal_prompt_item = None
@@ -328,8 +329,8 @@ class MenuDelegate(NSObject):
             text = state.last_transcription
         if text:
             threading.Thread(
-                target=type_chunked,
-                args=(text,),
+                target=insert_text,
+                args=(text, state),
                 daemon=True
             ).start()
 
@@ -340,6 +341,9 @@ class MenuDelegate(NSObject):
             self.paste_mode_item.setState_(
                 NSOffState if state.use_type_mode else NSOnState
             )
+        if self.retype_item:
+            verb = "Retype" if state.use_type_mode else "Paste"
+            self.retype_item.setTitle_(f"{verb} last transcript")
         mode_name = "Type" if state.use_type_mode else "Paste"
         logger.debug(f"Text insertion mode: {mode_name}")
 
@@ -528,12 +532,14 @@ def setup_menu_bar(shutdown_event, state):
 
     hideable_items = []
 
-    # Retype Last
+    # Retype/Paste Last
+    retype_verb = "Retype" if state.use_type_mode else "Paste"
     retype_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Retype last transcript", "retypeLast:", "c"
+        f"{retype_verb} last transcript", "retypeLast:", "c"
     )
     retype_item.setKeyEquivalentModifierMask_(NSEventModifierFlagControl | NSEventModifierFlagCommand)
     retype_item.setTarget_(delegate)
+    delegate.retype_item = retype_item
     menu.addItem_(retype_item)
     hideable_items.append(retype_item)
 
