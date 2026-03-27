@@ -32,7 +32,16 @@ def recording_loop(state):
     Audio data is float32 in [-1, 1] range (SoundCard's native format).
     """
     try:
-        mic = sc.default_microphone()
+        mic_id = state.selected_mic_id
+        if mic_id is not None:
+            try:
+                mic = sc.get_microphone(mic_id, include_loopback=True)
+                logger.debug(f"Using selected microphone: {mic.name}")
+            except Exception:
+                logger.warning(f"Selected microphone not found (id={mic_id}), falling back to system default")
+                mic = sc.default_microphone()
+        else:
+            mic = sc.default_microphone()
         with mic.recorder(samplerate=SAMPLE_RATE, channels=[0]) as rec:
             while state.is_recording:
                 data = rec.record(numframes=SAMPLE_RATE // 10)

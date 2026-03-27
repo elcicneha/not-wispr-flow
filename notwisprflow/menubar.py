@@ -22,8 +22,10 @@ from AppKit import (
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSBackingStoreBuffered,
     NSLineBreakByWordWrapping,
+    NSForegroundColorAttributeName,
 )
-from Foundation import NSMakeRect
+from Foundation import NSMakeRect, NSMutableAttributedString, NSMakeRange
+import soundcard as sc
 
 from .config import LLM_MODELS
 from .preferences import save_preference
@@ -319,6 +321,7 @@ class MenuDelegate(NSObject):
     start_at_login_item = None
     llm_model_items = None
     personal_prompt_item = None
+    mic_submenu = None
     status_item = None
     hideable_items = None
     _state = None  # AppState reference, set during setup
@@ -365,6 +368,63 @@ class MenuDelegate(NSObject):
 
         display = LLM_MODELS.get(model_name, {}).get("display", model_name)
         logger.info(f"LLM model switched to: {display} ({model_name})")
+
+    def selectMicrophone_(self, sender):
+        state = self._state
+        mic_id = sender.representedObject()
+        state.selected_mic_id = mic_id
+        save_preference("selected_mic_id", mic_id)
+
+        mic_name = sender.title()
+        logger.info(f"Microphone switched to: {mic_name}")
+
+    def menuNeedsUpdate_(self, menu):
+        """Rebuild mic submenu items each time it opens (handles plug/unplug)."""
+        if menu != self.mic_submenu:
+            return
+
+        menu.removeAllItems()
+        state = self._state
+        current_id = state.selected_mic_id
+
+        # System Default option — show actual default mic name in faded text
+        default_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "System Default", "selectMicrophone:", ""
+        )
+        try:
+            default_mic_name = sc.default_microphone().name
+            label = "System Default "
+            suffix = f"({default_mic_name})"
+            attr_str = NSMutableAttributedString.alloc().initWithString_(label + suffix)
+            gray = NSColor.secondaryLabelColor()
+            attr_str.addAttribute_value_range_(
+                NSForegroundColorAttributeName, gray,
+                NSMakeRange(len(label), len(suffix))
+            )
+            default_item.setAttributedTitle_(attr_str)
+        except Exception:
+            pass
+        default_item.setTarget_(self)
+        default_item.setRepresentedObject_(None)
+        default_item.setState_(NSOnState if current_id is None else NSOffState)
+        menu.addItem_(default_item)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        # List all available microphones
+        try:
+            mics = sc.all_microphones(include_loopback=False)
+        except Exception:
+            mics = []
+
+        for mic in mics:
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                mic.name, "selectMicrophone:", ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_(mic.id)
+            item.setState_(NSOnState if mic.id == current_id else NSOffState)
+            menu.addItem_(item)
 
     def editPersonalPrompt_(self, sender):
         state = self._state
@@ -615,6 +675,16 @@ def setup_menu_bar(shutdown_event, state):
     start_at_login_item.setState_(NSOnState if is_login_item_installed() else NSOffState)
     delegate.start_at_login_item = start_at_login_item
     menu.addItem_(start_at_login_item)
+
+    # Microphone submenu (rebuilt dynamically on open via menuNeedsUpdate_)
+    mic_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Microphone", None, ""
+    )
+    mic_submenu = NSMenu.alloc().init()
+    mic_submenu.setDelegate_(delegate)
+    delegate.mic_submenu = mic_submenu
+    mic_menu_item.setSubmenu_(mic_submenu)
+    menu.addItem_(mic_menu_item)
 
     # Open Logs
     logs_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(

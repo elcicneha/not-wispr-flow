@@ -204,6 +204,9 @@ class AppState:
         # Media pause/resume during recording
         self.media_was_paused = False  # True if we paused media (so we know to resume)
 
+        # Microphone selection (None = System Default)
+        self.selected_mic_id = load_preference("selected_mic_id", None)
+
 
 # Global state instance
 state = AppState()
