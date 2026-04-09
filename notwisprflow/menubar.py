@@ -8,7 +8,9 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import objc
@@ -31,6 +33,7 @@ from .config import LLM_MODELS
 from .preferences import save_preference
 from .startup import is_login_item_installed, install_login_item, uninstall_login_item
 from .text_output import insert_text
+from . import transcript_history
 
 logger = logging.getLogger("notwisprflow")
 
@@ -322,9 +325,11 @@ class MenuDelegate(NSObject):
     llm_model_items = None
     personal_prompt_item = None
     mic_submenu = None
+    history_submenu = None
     status_item = None
     hideable_items = None
-    _state = None  # AppState reference, set during setup
+    _state = None        # AppState reference, set during setup
+    _status_button = None  # NSStatusBarButton for "Copied!" flash
 
     def retypeLast_(self, sender):
         state = self._state
@@ -378,8 +383,81 @@ class MenuDelegate(NSObject):
         mic_name = sender.title()
         logger.info(f"Microphone switched to: {mic_name}")
 
+    def copyHistoryItem_(self, sender):
+        text = sender.representedObject()
+        if not text:
+            return
+        pb = NSPasteboard.generalPasteboard()
+        pb.clearContents()
+        pb.setString_forType_(text, 'public.utf8-plain-text')
+        if self._status_button:
+            self._status_button.setTitle_(" Copied!")
+            t = threading.Timer(1.5, self._clearCopiedTitle)
+            t.daemon = True
+            t.start()
+
+    def _clearCopiedTitle(self):
+        if self._status_button:
+            self._status_button.performSelectorOnMainThread_withObject_waitUntilDone_(
+                'setTitle:', '', False
+            )
+
+    def viewAllHistory_(self, sender):
+        rows = transcript_history.get_all()
+        if not rows:
+            return
+        lines = []
+        for _, text, ts_str in rows:
+            lines.append(ts_str)
+            lines.append(text)
+            lines.append("")
+        content = "\n".join(lines)
+        tmp_path = os.path.join(tempfile.gettempdir(), "notwisprflow_transcript_history.txt")
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            subprocess.Popen(["qlmanage", "-p", tmp_path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            logger.warning(f"Failed to open transcript history file: {e}")
+
+    def _rebuild_history_submenu(self, menu):
+        menu.removeAllItems()
+        rows = transcript_history.get_recent(5)
+        if not rows:
+            empty = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "No transcripts yet", None, ""
+            )
+            empty.setEnabled_(False)
+            menu.addItem_(empty)
+        else:
+            for _, text, ts_str in rows:
+                try:
+                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
+                truncated = (text[:60] + "\u2026") if len(text) > 60 else text
+                title = truncated
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    title, "copyHistoryItem:", ""
+                )
+                item.setTarget_(self)
+                item.setRepresentedObject_(text)
+                menu.addItem_(item)
+            menu.addItem_(NSMenuItem.separatorItem())
+        view_all = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "View All\u2026", "viewAllHistory:", ""
+        )
+        view_all.setTarget_(self)
+        menu.addItem_(view_all)
+
     def menuNeedsUpdate_(self, menu):
-        """Rebuild mic submenu items each time it opens (handles plug/unplug)."""
+        """Rebuild dynamic submenus each time they open."""
+        if menu == self.history_submenu:
+            self._rebuild_history_submenu(menu)
+            return
         if menu != self.mic_submenu:
             return
 
@@ -576,6 +654,7 @@ def setup_menu_bar(shutdown_event, state):
     delegate = MenuDelegate.alloc().init()
     delegate.shutdown_event = shutdown_event
     delegate._state = state
+    delegate._status_button = button
 
     menu = NSMenu.alloc().init()
     menu.setMinimumWidth_(180)
@@ -602,6 +681,17 @@ def setup_menu_bar(shutdown_event, state):
     delegate.retype_item = retype_item
     menu.addItem_(retype_item)
     hideable_items.append(retype_item)
+
+    # Transcript History submenu (rebuilt dynamically on open)
+    history_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        "Transcript History", None, ""
+    )
+    history_submenu = NSMenu.alloc().init()
+    history_submenu.setDelegate_(delegate)
+    delegate.history_submenu = history_submenu
+    history_menu_item.setSubmenu_(history_submenu)
+    menu.addItem_(history_menu_item)
+    hideable_items.append(history_menu_item)
 
     sep1 = NSMenuItem.separatorItem()
     menu.addItem_(sep1)

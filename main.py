@@ -66,6 +66,7 @@ from notwisprflow.startup import is_login_item_installed, install_login_item
 from notwisprflow import menubar, audio, keyboard_handler
 from notwisprflow.permissions import test_microphone_access, check_accessibility_permission
 from notwisprflow.text_output import insert_text, get_cursor_context
+from notwisprflow.transcript_history import init_db, add_transcript
 
 
 # ============================================================================
@@ -284,6 +285,7 @@ def transcribe_and_type(audio_buffer, overflow_files=None, recording_mode=None,
                             llm_model=state.llm_model, llm_processor=state.llm_processor)
 
         insert_text(text, state)
+        add_transcript(text)
         processing_sec = time.time() - processing_start
 
         total_sec = time.time() - recording_stop_time if recording_stop_time else processing_sec
@@ -407,6 +409,9 @@ def main():
 
     validate_config()
     logger = setup_logging()
+
+    # Initialize transcript history DB
+    init_db()
 
     # Clean up overflow files from previous crashes
     audio.cleanup_stale_overflow_files()
