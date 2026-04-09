@@ -35,7 +35,7 @@ def recording_loop(state):
         mic_id = state.selected_mic_id
         if mic_id is not None:
             try:
-                mic = sc.get_microphone(mic_id, include_loopback=True)
+                mic = sc.get_microphone(mic_id)
                 logger.debug(f"Using selected microphone: {mic.name}")
             except Exception:
                 logger.warning(f"Selected microphone not found (id={mic_id}), falling back to system default")
