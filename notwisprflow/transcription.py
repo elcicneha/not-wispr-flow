@@ -325,7 +325,19 @@ class TranscriptionManager:
                 return result
 
     def contains_speech(self, audio_float, sample_rate=SAMPLE_RATE):
-        """Check if audio contains speech using Silero VAD."""
+        """Check if audio contains speech using Silero VAD with RMS energy fallback.
+
+        Passes if VAD detects speech OR RMS energy exceeds a floor threshold.
+        The energy fallback catches melodic/sung speech that VAD misclassifies,
+        while still blocking truly silent recordings (which cause Whisper hallucinations).
+        """
+        # RMS energy check — truly silent audio sits well below 0.01
+        rms = float(np.sqrt(np.mean(audio_float ** 2)))
+        if rms > 0.01:
+            self.logger.info(f"RMS check passed (rms={rms:.4f}), skipping VAD")
+            return True
+        self.logger.info(f"RMS check failed (rms={rms:.4f}), falling through to VAD")
+
         if self.vad_model is None or self.vad_utils is None:
             return True  # If VAD not available, proceed with transcription
 
@@ -335,7 +347,7 @@ class TranscriptionManager:
                 audio_float,
                 self.vad_model,
                 sampling_rate=sample_rate,
-                threshold=0.5,
+                threshold=0.2,
                 min_speech_duration_ms=250,
                 min_silence_duration_ms=100,
                 return_seconds=False
@@ -343,7 +355,7 @@ class TranscriptionManager:
 
             has_speech = len(speech_timestamps) > 0
             if not has_speech:
-                self.logger.info("VAD: No speech detected in audio")
+                self.logger.info(f"VAD: No speech detected in audio (rms={rms:.4f})")
             else:
                 self.logger.debug(f"VAD: Detected {len(speech_timestamps)} speech segment(s)")
             return has_speech
