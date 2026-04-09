@@ -13,6 +13,7 @@ import logging
 import threading
 import time
 
+from Quartz import CGEventSourceFlagsState, kCGEventSourceStateCombinedSessionState
 from pynput.keyboard import Key
 
 from .config import HOTKEY_KEYS, TOGGLE_KEY
@@ -24,10 +25,26 @@ logger = logging.getLogger("notwisprflow")
 # Debounce time for rapid key presses (milliseconds)
 DEBOUNCE_MS = 100
 
+# Modifier flag bitmasks (CGEvent / NSEvent use the same values)
+_MOD_CMD   = 1 << 20
+_MOD_OPT   = 1 << 19
+_MOD_SHIFT = 1 << 17
+_EXTRA_MODIFIERS = _MOD_CMD | _MOD_OPT | _MOD_SHIFT
+
 
 def is_hotkey(key):
     """Check if a key event matches any of the configured hotkey variants."""
     return key in HOTKEY_KEYS
+
+
+def _modifier_flags():
+    """Return current modifier flags. Thread-safe; works from CGEvent tap threads."""
+    return CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState)
+
+
+def _has_extra_modifiers():
+    """Return True if Cmd, Option, or Shift are currently held alongside the hotkey."""
+    return bool(_modifier_flags() & _EXTRA_MODIFIERS)
 
 
 def create_handlers(state, update_icon_fn, on_audio_ready_fn):
@@ -75,8 +92,8 @@ def create_handlers(state, update_icon_fn, on_audio_ready_fn):
                     state.last_press_time = current_time
                     state.hotkey_pressed = True
 
-                    # Cmd held = command combo (e.g. Ctrl+Cmd+C for retype), skip recording
-                    if state.cmd_pressed:
+                    # Extra modifiers (Cmd, Option, Shift) = combo shortcut, skip recording
+                    if _has_extra_modifiers():
                         return
 
                     # --- Stuck state recovery ---
@@ -131,7 +148,7 @@ def create_handlers(state, update_icon_fn, on_audio_ready_fn):
                 elif key == TOGGLE_KEY:
                     state.space_pressed = True
 
-                    if state.hotkey_pressed:
+                    if state.hotkey_pressed and not _has_extra_modifiers():
                         if state.mode is None:
                             state.mode = "toggle"
                             try:
@@ -145,10 +162,7 @@ def create_handlers(state, update_icon_fn, on_audio_ready_fn):
                             state.mode = "toggle"
                             logger.debug("Converted hold mode to toggle mode")
 
-                elif key in (Key.cmd, Key.cmd_r, Key.cmd_l):
-                    state.cmd_pressed = True
-
-                elif state.hotkey_pressed and state.cmd_pressed and getattr(key, 'vk', None) == 8:
+                elif state.hotkey_pressed and (_modifier_flags() & _MOD_CMD) and getattr(key, 'vk', None) == 8:
                     # Ctrl+Cmd+C -> Retype last transcription
                     if state.is_recording:
                         audio.cancel_recording(state)
@@ -200,9 +214,6 @@ def create_handlers(state, update_icon_fn, on_audio_ready_fn):
 
                 elif key == TOGGLE_KEY:
                     state.space_pressed = False
-
-                elif key in (Key.cmd, Key.cmd_r, Key.cmd_l):
-                    state.cmd_pressed = False
         except Exception as e:
             logger.error(f"Error in on_release handler: {e}")
 

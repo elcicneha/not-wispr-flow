@@ -176,7 +176,6 @@ class AppState:
         # Key state tracking
         self.hotkey_pressed = False
         self.space_pressed = False
-        self.cmd_pressed = False
 
         # Text insertion mode
         self.last_transcription = None   # stores last transcribed text for "Retype Last"
