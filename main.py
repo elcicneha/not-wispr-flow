@@ -52,7 +52,7 @@ from Foundation import NSDate, NSDefaultRunLoopMode
 
 from notwisprflow.config import (
     HOTKEY_KEYS, TOGGLE_KEY, WHISPER_MODEL, DEBUG, LANGUAGE,
-    TRANSCRIPTION_MODE, GROQ_MODEL, GROQ_API_KEY,
+    TRANSCRIPTION_MODE, GROQ_MODEL, GROQ_API_KEY, CUSTOM_VOCABULARY,
     LLM_MODEL, LLM_MODELS, LLM_TEMPERATURE,
     LLM_PROMPT, USE_TYPE_MODE, START_AT_LOGIN,
 )
@@ -61,7 +61,7 @@ from notwisprflow.transcription import TranscriptionManager
 from notwisprflow.llm_processor import LLMProcessor
 from notwisprflow.media_control import resume_media
 from notwisprflow.post_processing import post_process
-from notwisprflow.preferences import load_preference
+from notwisprflow.preferences import load_preference, merge_vocabularies
 from notwisprflow.startup import is_login_item_installed, install_login_item
 from notwisprflow import menubar, audio, keyboard_handler
 from notwisprflow.permissions import test_microphone_access, check_accessibility_permission
@@ -185,6 +185,11 @@ class AppState:
         # LLM model and prompt selection (runtime state, can be changed via menu bar)
         self.llm_model = load_preference("llm_model", LLM_MODEL)
         self.llm_prompt = load_preference("llm_prompt", LLM_PROMPT)
+
+        # Custom vocabulary — merge config baseline + menu-bar pref (deduped, case-insensitive)
+        self.custom_vocabulary = merge_vocabularies(
+            CUSTOM_VOCABULARY, load_preference("custom_vocabulary", "")
+        )
 
         # Model loading state (True while speech model is being loaded/downloaded)
         self.is_loading_model = False
@@ -445,6 +450,7 @@ def main():
         language=LANGUAGE,
         logger=logger,
         status_callback=status_callback,
+        custom_vocabulary=state.custom_vocabulary,
     )
 
     # Initialize LLM processor (model may be overridden by saved preference)

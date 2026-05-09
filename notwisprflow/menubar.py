@@ -29,8 +29,8 @@ from AppKit import (
 from Foundation import NSMakeRect, NSMutableAttributedString, NSMakeRange
 import soundcard as sc
 
-from .config import LLM_MODELS
-from .preferences import save_preference
+from .config import LLM_MODELS, CUSTOM_VOCABULARY
+from .preferences import save_preference, merge_vocabularies
 from .startup import is_login_item_installed, install_login_item, uninstall_login_item
 from .text_output import insert_text
 from . import transcript_history
@@ -324,6 +324,7 @@ class MenuDelegate(NSObject):
     start_at_login_item = None
     llm_model_items = None
     personal_prompt_item = None
+    custom_vocab_item = None
     mic_submenu = None
     history_submenu = None
     status_item = None
@@ -594,6 +595,100 @@ class MenuDelegate(NSObject):
                     "Personal Prompt (Active)" if has_active else "Personal Prompt..."
                 )
 
+    def editCustomVocabulary_(self, sender):
+        state = self._state
+        W = 460
+        PAD = 20
+        IW = W - 2 * PAD
+        TOTAL_H = 280
+
+        _ensure_edit_menu()
+
+        panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, W, TOTAL_H),
+            NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
+            NSBackingStoreBuffered,
+            False,
+        )
+        panel.setTitle_("Custom Vocabulary")
+        content = panel.contentView()
+
+        ctrl = _PromptPanelController.alloc().init()
+        ctrl._panel = panel
+        ctrl._state = state
+
+        def mac_y(t, h):
+            return TOTAL_H - t - h
+
+        sub_top = 8
+        subtitle = NSTextField.alloc().initWithFrame_(NSMakeRect(PAD, mac_y(sub_top, 48), IW, 48))
+        subtitle.setStringValue_(
+            "Comma-separated proper nouns / technical terms that you want to Not Wispr Flow to spell correctly."
+        )
+        subtitle.setBezeled_(False)
+        subtitle.setDrawsBackground_(False)
+        subtitle.setEditable_(False)
+        subtitle.setSelectable_(False)
+        subtitle.setFont_(NSFont.systemFontOfSize_(12))
+        subtitle.setTextColor_(NSColor.secondaryLabelColor())
+        subtitle.setLineBreakMode_(NSLineBreakByWordWrapping)
+        content.addSubview_(subtitle)
+        ctrl._subtitle = subtitle
+
+        # Vocabulary text view — shows the merged effective list
+        vocab_top = sub_top + 52
+        vocab_scroll, vocab_tv = _make_text_view(IW, 140)
+        vocab_scroll.setFrame_(NSMakeRect(PAD, mac_y(vocab_top, 140), IW, 140))
+        vocab_tv.setString_(state.custom_vocabulary or "")
+        content.addSubview_(vocab_scroll)
+        ctrl._personal_scroll = vocab_scroll
+        ctrl._personal_tv = vocab_tv
+
+        btn_top = vocab_top + 148
+        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 190, mac_y(btn_top, 30), 80, 30))
+        cancel_btn.setTitle_("Cancel")
+        cancel_btn.setBezelStyle_(NSBezelStyleRounded)
+        cancel_btn.setKeyEquivalent_("\x1b")
+        content.addSubview_(cancel_btn)
+        ctrl._cancel_btn = cancel_btn
+
+        save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(W - 100, mac_y(btn_top, 30), 80, 30))
+        save_btn.setTitle_("Save")
+        save_btn.setBezelStyle_(NSBezelStyleRounded)
+        save_btn.setKeyEquivalent_("s")
+        save_btn.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
+        content.addSubview_(save_btn)
+        ctrl._save_btn = save_btn
+
+        save_btn.setTarget_(ctrl)
+        save_btn.setAction_("doSave:")
+        cancel_btn.setTarget_(ctrl)
+        cancel_btn.setAction_("doCancel:")
+
+        panel.center()
+        panel.makeFirstResponder_(vocab_tv)
+
+        app = NSApplication.sharedApplication()
+        app.runModalForWindow_(panel)
+        panel.orderOut_(None)
+
+        if ctrl._should_save:
+            typed = vocab_tv.string()
+            # Persist what the user typed (the menu-bar layer). At runtime we apply
+            # the merge of CONFIG + pref so config baseline always survives.
+            save_preference("custom_vocabulary", typed)
+            merged = merge_vocabularies(CUSTOM_VOCABULARY, typed)
+            state.custom_vocabulary = merged
+            if state.transcription_manager:
+                state.transcription_manager.set_custom_vocabulary(merged)
+
+            has_active = bool(merged.strip())
+            if self.custom_vocab_item:
+                self.custom_vocab_item.setTitle_(
+                    "Custom Vocabulary (Active)" if has_active else "Custom Vocabulary..."
+                )
+            logger.info(f"Custom vocabulary updated ({len(merged)} chars)")
+
     def toggleStartAtLogin_(self, sender):
         enabled = not is_login_item_installed()
         if enabled:
@@ -752,6 +847,17 @@ def setup_menu_bar(shutdown_event, state):
     delegate.personal_prompt_item = personal_prompt_item
     menu.addItem_(personal_prompt_item)
     hideable_items.append(personal_prompt_item)
+
+    # Custom Vocabulary
+    has_vocab = bool((state.custom_vocabulary or "").strip())
+    vocab_title = "Custom Vocabulary (Active)" if has_vocab else "Custom Vocabulary..."
+    custom_vocab_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+        vocab_title, "editCustomVocabulary:", ""
+    )
+    custom_vocab_item.setTarget_(delegate)
+    delegate.custom_vocab_item = custom_vocab_item
+    menu.addItem_(custom_vocab_item)
+    hideable_items.append(custom_vocab_item)
 
     sep2 = NSMenuItem.separatorItem()
     menu.addItem_(sep2)

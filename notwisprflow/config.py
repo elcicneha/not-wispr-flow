@@ -55,6 +55,12 @@ WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 # Groq API Whisper model (only used in online/auto modes)
 GROQ_MODEL = "whisper-large-v3"
 
+# Custom vocabulary — comma-separated glossary of proper nouns / technical terms
+# Whisper sees this as context and is more likely to spell these correctly.
+# Keep it to a flat list (no sentences), under ~50 words. Examples:
+#   "Claude, shadcn, PyObjC, MLX, Anthropic, Groq, pynput"
+CUSTOM_VOCABULARY = "Claude, CLAUDE.md, Claude Code, shadcn"
+
 # ============================================================================
 # HOTKEYS
 # ============================================================================

@@ -164,7 +164,7 @@ def _initialize_vad(logger):
 # Local MLX Whisper backend
 # ============================================================================
 
-def _initialize_whisper(model_name, language, stop_event, logger):
+def _initialize_whisper(model_name, language, stop_event, logger, prompt_getter=None):
     """
     Initialize MLX Whisper backend on a dedicated thread.
 
@@ -176,6 +176,9 @@ def _initialize_whisper(model_name, language, stop_event, logger):
         language: Language code or None for auto-detect
         stop_event: threading.Event to signal the worker to exit
         logger: Logger instance
+        prompt_getter: Optional callable returning the current initial_prompt string
+            (or None/empty). Called per-transcription so vocabulary edits take effect
+            without reloading the model.
 
     Returns:
         callable: transcribe(audio_float: np.ndarray) -> dict
@@ -201,11 +204,11 @@ def _initialize_whisper(model_name, language, stop_event, logger):
                 except queue.Empty:
                     continue
                 try:
-                    result = mlx_whisper.transcribe(
-                        audio_float,
-                        path_or_hf_repo=model_name,
-                        language=language,
-                    )
+                    kwargs = {"path_or_hf_repo": model_name, "language": language}
+                    prompt = prompt_getter() if prompt_getter else None
+                    if prompt:
+                        kwargs["initial_prompt"] = prompt
+                    result = mlx_whisper.transcribe(audio_float, **kwargs)
                     result_q.put(result)
                 except Exception as e:
                     result_q.put(e)
@@ -248,10 +251,13 @@ class TranscriptionManager:
         "auto"    - Try Groq first, fall back to local MLX
     """
 
-    def __init__(self, mode, groq_api_key, groq_model, whisper_model, language, logger, status_callback=None):
+    def __init__(self, mode, groq_api_key, groq_model, whisper_model, language, logger, status_callback=None, custom_vocabulary=""):
         self.mode = mode
         self.logger = logger
         self._status_callback = status_callback  # callable(event, value) for UI updates
+        # Whisper prompt — read each transcription via attribute, so menu-bar edits
+        # take effect without reloading the model. Plain string assignment is atomic in CPython.
+        self._whisper_prompt = (custom_vocabulary or "").strip() or None
 
         # VAD (always local, always loaded — only ~50MB)
         self.vad_model, self.vad_utils = _initialize_vad(logger)
@@ -364,6 +370,10 @@ class TranscriptionManager:
             self.logger.warning(f"VAD check failed: {e}, proceeding with transcription")
             return True
 
+    def set_custom_vocabulary(self, text):
+        """Update the Whisper prompt at runtime. Takes effect on the next transcription."""
+        self._whisper_prompt = (text or "").strip() or None
+
     def shutdown(self):
         """Clean up threads and resources."""
         if self._shutdown:
@@ -417,11 +427,14 @@ class TranscriptionManager:
         if self._groq_client is None:
             self._groq_client = Groq(api_key=self._groq_api_key, timeout=10.0)
 
-        result = self._groq_client.audio.transcriptions.create(
-            file=("audio.wav", buf),
-            model=self._groq_model,
-            language=self._language or "",
-        )
+        kwargs = {
+            "file": ("audio.wav", buf),
+            "model": self._groq_model,
+            "language": self._language or "",
+        }
+        if self._whisper_prompt:
+            kwargs["prompt"] = self._whisper_prompt
+        result = self._groq_client.audio.transcriptions.create(**kwargs)
         return {"text": result.text}
 
     def _predownload_model(self):
@@ -446,7 +459,8 @@ class TranscriptionManager:
             try:
                 self._local_transcribe_fn = _initialize_whisper(
                     self._whisper_model_name, self._language,
-                    self._worker_stop, self.logger
+                    self._worker_stop, self.logger,
+                    prompt_getter=lambda: self._whisper_prompt,
                 )
             except Exception as e:
                 self.logger.error(f"Failed to load Whisper model: {e}", exc_info=True)

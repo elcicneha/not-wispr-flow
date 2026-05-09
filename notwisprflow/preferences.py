@@ -42,6 +42,29 @@ def save_preference(key, value):
         pass
 
 
+def merge_vocabularies(*sources):
+    """Merge comma-separated vocabulary strings into one, deduping case-insensitively.
+
+    Order is preserved (first occurrence wins). Empty sources are skipped.
+    Used to combine the config.py CUSTOM_VOCABULARY with the menu-bar-edited value.
+    """
+    seen = set()
+    parts = []
+    for source in sources:
+        if not source:
+            continue
+        for raw in source.split(","):
+            word = raw.strip()
+            if not word:
+                continue
+            key = word.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            parts.append(word)
+    return ", ".join(parts)
+
+
 def resolve_api_key(config_value, env_var_name, file_path):
     """Resolve an API key from config value → environment variable → dotfile.
 

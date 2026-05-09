@@ -45,20 +45,21 @@ No automated tests. Manual testing requires running the app and dictating into a
 - **`notwisprflow/menubar.py`** — All menu bar UI: icon manager, menu delegate, prompt panel, status updater
 - **`notwisprflow/text_output.py`** — Text insertion (clipboard paste or CGEvent typing), cursor context via Accessibility APIs
 - **`notwisprflow/permissions.py`** — macOS mic/accessibility permission checks
-- **`notwisprflow/preferences.py`** — Prefs persistence (`~/.config/notwisprflow/preferences.json`) and `resolve_api_key()`
-- **`notwisprflow/transcription.py`** — `TranscriptionManager`: MLX Whisper, Groq API, Silero VAD, connectivity monitor, model lifecycle
+- **`notwisprflow/preferences.py`** — Prefs persistence (`~/.config/notwisprflow/preferences.json`), `resolve_api_key()`, `merge_vocabularies()`
+- **`notwisprflow/transcription.py`** — `TranscriptionManager`: MLX Whisper, Groq API, Silero VAD, connectivity monitor, model lifecycle, runtime-editable Whisper prompt (custom vocabulary)
 - **`notwisprflow/llm_processor.py`** — `LLMProcessor`: multi-provider dispatch (Gemini/Groq/OpenAI/Anthropic)
 - **`notwisprflow/post_processing.py`** — LLM enhancement + smart spacing pipeline
 - **`notwisprflow/startup.py`** — LaunchAgent plist management for start-at-login
 - **`notwisprflow/media_control.py`** — Media pause/resume via macOS private `MediaRemote.framework`
+- **`notwisprflow/transcript_history.py`** — SQLite-backed transcript history (`~/.config/notwisprflow/transcript_history.db`). 5MB cap with auto-prune. `init_db()` on startup, `add_transcript()` after each transcription, `get_recent()`/`get_all()` for menu bar display
 
 ### Dependency Graph (acyclic)
 ```
 main.py → keyboard_handler, audio, menubar, text_output, permissions, preferences, startup
 keyboard_handler → audio, text_output, config
 audio → config, constants, media_control
-menubar → config, preferences, text_output, startup
-text_output, permissions, media_control, startup → standalone (no app imports)
+menubar → config, preferences, text_output, startup, transcript_history
+text_output, permissions, media_control, startup, transcript_history → standalone (no app imports)
 transcription → constants, preferences
 llm_processor → config, preferences
 post_processing → llm_processor
@@ -105,8 +106,9 @@ Key non-obvious settings:
 - `TRANSCRIPTION_MODE`: `"auto"` (cloud with offline fallback), `"offline"`, or `"online"`
 - `LLM_MODEL`: set to `"disabled"` to turn off. LLM only runs with online transcription, never offline
 - `USE_TYPE_MODE`: `False` = clipboard paste (default), `True` = character-by-character typing
+- `CUSTOM_VOCABULARY`: comma-separated baseline glossary that biases Whisper (`prompt`/`initial_prompt`). The effective vocabulary at runtime is `merge_vocabularies(CUSTOM_VOCABULARY, preferences["custom_vocabulary"])` — case-insensitive dedupe, config baseline always survives
 
-API key resolution order (via `resolve_api_key()`): config.py → env var → dotfile in `~/.config/notwisprflow/` (`api_key`, `gemini_api_key`, `openai_api_key`, `anthropic_api_key`). Runtime state (LLM model, prompt) persists in `~/.config/notwisprflow/preferences.json`.
+API key resolution order (via `resolve_api_key()`): config.py → env var → dotfile in `~/.config/notwisprflow/` (`api_key`, `gemini_api_key`, `openai_api_key`, `anthropic_api_key`). Runtime state (LLM model, prompt, custom vocabulary, selected mic) persists in `~/.config/notwisprflow/preferences.json`.
 
 ## Important Gotchas
 
@@ -133,6 +135,9 @@ In `TranscriptionManager.contains_speech()`, adjust `_get_speech_timestamps_nump
 
 ### Adding an LLM provider
 Add provider in `llm_processor.py` (key resolution, client init, process method). Add models to `LLM_MODELS` in `config.py`. Add prompt presets to `LLM_PROMPTS` in `config.py`.
+
+### Tweaking the Whisper vocabulary bias
+Edit `CUSTOM_VOCABULARY` in `config.py` for the baseline (rebuild required), or use the menu bar's "Custom Vocabulary..." for runtime additions (no rebuild). Both are merged + deduped on every read. The MLX worker reads the prompt via `prompt_getter` lambda each transcription, so edits take effect immediately without reloading the ~2.3GB model.
 
 ## Design Decisions Log (MANDATORY)
 
