@@ -33,10 +33,13 @@ export default function Header() {
       {/* Right controls */}
       <div className="flex items-center gap-6" >
         <TextLink
+          href="#install">
+          Download
+        </TextLink>
+        <TextLink
           href={REPO_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-mono text-xs tracking-[0.04em] text-ink-soft"
         >
           GitHub
         </TextLink>
