@@ -18,6 +18,20 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     images: ["/og-card.png"],
   },
+  icons: {
+    icon: [
+      {
+        url: "/logo-light-mode.png",
+        type: "image/png",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/logo-dark-mode.png",
+        type: "image/png",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+  },
 };
 
 export default function RootLayout({
