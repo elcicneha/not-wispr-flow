@@ -34,6 +34,35 @@ rm -rf build dist && python3 setup.py py2app
 
 No automated tests. Manual testing requires running the app and dictating into a text editor.
 
+## Code Search
+
+Use `semble search` to find code by describing what it does or naming a symbol/identifier, instead of grep:
+
+```bash
+semble search "authentication flow" ./my-project
+semble search "save_pretrained" ./my-project
+semble search "save model to disk" ./my-project --top-k 10
+```
+
+Use `semble find-related` to discover code similar to a known location (pass `file_path` and `line` from a prior search result):
+
+```bash
+semble find-related src/auth.py 42 ./my-project
+```
+
+`path` defaults to the current directory when omitted; git URLs are accepted. If `semble` is not on `$PATH`, use `uvx --from "semble[mcp]" semble` in its place.
+
+Workflow: start with `semble search`, inspect full files only when the chunk isn't enough, optionally pivot via `semble find-related`, and use grep only for exhaustive literal matches.
+
+## Repository Layout
+
+Two independent subprojects share this repo:
+
+- **Root (`main.py`, `notwisprflow/`)** — the macOS dictation app. Python + PyObjC. This is the primary subject of this CLAUDE.md.
+- **`website/`** — Next.js 16 + React 19 + Tailwind v4 marketing/demo site. **This is not the Next.js you know** — Next.js 16 has breaking changes vs. training data; consult `node_modules/next/dist/docs/` before writing API-touching code. pnpm-managed. Scripts: `pnpm dev`, `pnpm build`, `pnpm lint`. See **Website Architecture** section below for full details.
+
+The two subprojects do not import from each other. Treat each as its own working directory when making changes.
+
 ## Architecture
 
 ### Module Structure
@@ -138,6 +167,110 @@ Add provider in `llm_processor.py` (key resolution, client init, process method)
 
 ### Tweaking the Whisper vocabulary bias
 Edit `CUSTOM_VOCABULARY` in `config.py` for the baseline (rebuild required), or use the menu bar's "Custom Vocabulary..." for runtime additions (no rebuild). Both are merged + deduped on every read. The MLX worker reads the prompt via `prompt_getter` lambda each transcription, so edits take effect immediately without reloading the ~2.3GB model.
+
+## Website Architecture
+
+The marketing site lives in `website/` and is independent from the Python app.
+
+### Folder hierarchy
+
+```
+website/
+├── app/                       # Next.js App Router — routing-related files only
+│   ├── layout.tsx             # Root layout: fonts, theme bootstrap, metadata
+│   ├── page.tsx               # Home page — composes sections
+│   ├── globals.css            # CSS reset, theme tokens, Tailwind @theme wiring, keyframes
+│   ├── fonts.ts               # next/font setup (Recoleta + Instrument Sans + JetBrains Mono)
+│   └── theme-script.ts        # Inline FOUC-free theme bootstrap (light/dark)
+├── components/
+│   ├── sections/              # Page-level sections (used once, not reusable)
+│   │                          # Header, Hero, Marquee, DemoSection, Features, Install, Footer
+│   └── ui/                    # Reusable UI primitives
+│                              # Button, TextLink, InlineCode, CodeBlock, Sticker, KbdKey,
+│                              # ThemeToggle, HandUnderline, Asterisks
+├── lib/                       # Utilities + content/copy
+│   ├── content.ts             # All page copy, URLs, structured data (features, install steps)
+│   └── cn.ts                  # className joiner utility (naive concat — does NOT dedupe Tailwind conflicts)
+├── fonts/                     # Local font files (referenced by app/fonts.ts)
+└── public/                    # Static assets served at / (images, video, OG card, favicon)
+```
+
+**Rule of thumb:** anything used once on a single page belongs in `components/sections/`. Anything reusable (used in 2+ places, or could be) belongs in `components/ui/`.
+
+### UI primitives — what to use when
+
+Always reach for an existing primitive before writing inline-styled markup. Each one owns its visual identity; consumers pass props, not styles.
+
+- **`Button`** — every button-shaped CTA or affordance. Renders `<a>` if you pass `href`, else `<button>`.
+  - `variant`: `primary` (filled accent CTA), `outline` (bordered ink CTA), `chip` (muted mono affordance like the copy chip / theme toggle).
+  - `size`: `sm` / `md` / `lg`. Sizes carry **only** dimensions (padding, font-size, border-width, radius). Variants carry treatment identity (bg, text color, font, weight, tracking, shadows). Never put colors or fonts in size; never put dimensions in variant.
+  - Uses `twMerge` internally, so `className` overrides reliably win against built-in classes (e.g. `<Button variant="chip" className="rounded-full">` swaps the radius).
+- **`TextLink`** — inline anchor with an underline. For links *inside flowing text* (footer credits) or standalone muted nav (header). Inherits font/color/size from context; pass typography classes via `className` only when the parent doesn't provide them.
+- **`InlineCode`** — `<code>` with the project's mono pill style for inline code references inside prose.
+- **`CodeBlock`** — `<pre>` block with copy button for fenced code samples.
+- **`Sticker`**, **`KbdKey`**, **`HandUnderline`**, **`Asterisks`** — purpose-built decorative primitives; see each file for props.
+- **`ThemeToggle`** — single instance, lives in `Header`. Don't replicate.
+
+**Do not** layer additional styling on top of a primitive (`<Button style={{...}}>`, `<Button className="text-blue-500">`) unless the call site has a specific, justified deviation from the design system. If you find yourself fighting a primitive with overrides, the primitive needs a new variant/size/prop — not a per-call patch.
+
+**Duplication rule:** if the same chunk of styling repeats across 2+ places (a base heading style, a card pattern, a marquee row), extract it. Either (a) lift to a primitive in `components/ui/` if it's a self-contained unit, or (b) add a base rule in `globals.css` (typically inside `@layer base` for element selectors like `h1`, or as a named class like `.home-h1` for repeated multi-element patterns). Inline duplication is the smell — flag it the moment you notice it.
+
+### Styling
+
+- **Tailwind v4 always.** Reach for utilities first (`bg-accent`, `text-ink`, `border-border`, `font-display`, `py-3.5`, etc.) before any other styling. Don't write inline `style={{...}}` for things a utility can express.
+- **CSS variables** on `:root` and `.dark` carry the theme palette and typography scale.
+- Theme tokens are wired into Tailwind via `@theme { --color-bg: var(--bg); --font-display: var(--font-display-var), serif; ... }` in `globals.css` — so utilities like `bg-bg`, `text-ink`, `border-border`, `font-display`, `font-mono` resolve to themed values that swap when `.dark` is added/removed on `<html>`. Use plain `@theme` (not `@theme inline`) so utilities reference the runtime variables and react to dark-mode swaps.
+- When you need a non-standard color or shadow inside an arbitrary value, reference the Tailwind theme variable name (e.g. `shadow-[4px_4px_0_var(--tw-shadow-color)]` paired with `shadow-ink-soft`), not the raw underlying var (`var(--ink-soft)`).
+- **Inline styles** are reserved for: dynamic per-instance values (rotations from arrays), `animation-delay` strings, `animation: <name> ...` longhand, and complex transforms with no Tailwind equivalent. Static design values do not belong in `style={{}}`.
+- **Use `rem`** for spacing values written in CSS rules (margin, padding, gap). Inline pixel values inside dynamic JS expressions are the exception.
+- **Animations** as `@keyframes` in `globals.css` (`wordReveal`, `marqueeScroll`, `underlineDraw`, `fadeUp`).
+- **No `next-themes` or motion libraries** — vanilla CSS handles everything.
+
+### Theme system
+
+- Two themes: `light` (lime BG, dark green ink) and `dark` (dark green BG, lime ink).
+- `<html class="dark">` (presence = dark, absence = light) controls everything via CSS variable swap.
+- Inline bootstrap script in `<head>` (rendered from `app/theme-script.ts`) reads `localStorage.theme` (or `prefers-color-scheme`) before paint to prevent FOUC.
+- `ui/ThemeToggle` is the only client component for state — toggles the `.dark` class on `<html>` and persists to localStorage.
+
+### Semantic HTML conventions
+
+- One `<h1>` per page (in Hero only). `<h2>` = section titles. `<h3>` = card / step titles.
+- `<section>` per page block. Each section gets its own component in `components/sections/`.
+- `<article>` for self-contained units (e.g. feature cards).
+- `<aside>` for tangential content (e.g. the screen-recording placeholder in the install section).
+- `<header>` / `<footer>` / `<main>` / `<nav>` per their standard roles.
+- `<kbd>` for keyboard keys (rendered via `ui/KbdKey`). `<code>` / `<pre>` for code (rendered via `ui/CodeBlock`).
+- `<button>` for actions (toggle, copy). `<a>` for navigation and external links — including in-page anchors like `href="#install"`.
+
+### Color & typography rules
+
+- **Never use `#000` or `#fff` for text or icons.** All colors flow through CSS variables (`--ink`, `--ink-soft`, `--accent-contrast`, etc.).
+- Display headings (`h1`/`h2`/`h3` and giant install-step numerals): **Recoleta Bold** via `var(--font-display-var)` or `font-display`.
+- Body / UI text: **Instrument Sans** via `font-sans`.
+- Code, kbd keys, mono accents (eyebrow tags, captions): **JetBrains Mono** via `font-mono`.
+
+### Adding a new section to the homepage
+
+1. Create `components/sections/YourSection.tsx`.
+2. Use `<section>` as the root with appropriate `id` if it's an anchor target.
+3. Pull copy from `lib/content.ts` — never hardcode strings in components.
+4. Compose into `app/page.tsx`.
+5. If it introduces a reusable primitive, lift it to `components/ui/`.
+
+### Adding a new UI primitive
+
+1. Create `components/ui/YourPrimitive.tsx`.
+2. Style with Tailwind utilities only — no `style={{}}` for static design values.
+3. If the primitive has variants/sizes, follow the Button pattern: `size` carries dimensions only, `variant` carries treatment identity. Never let the two axes set the same property.
+4. If consumers will likely want to override classes, use `twMerge` (from `tailwind-merge`) when composing className so overrides win deterministically. Otherwise the naive `cn` from `lib/cn.ts` is fine.
+5. Inline styles are reserved for genuinely dynamic per-instance values (rotations from arrays, animation delays).
+6. If it needs interactivity (state, click handlers), mark it with `"use client"`.
+7. Before shipping, scan the rest of the codebase: if you find inline-styled markup matching this primitive, replace it. Don't let the codebase carry both forms.
+
+### Content / copy
+
+All user-facing strings live in `lib/content.ts`. Components import named exports (`features`, `installSteps`, `marqueeContent`, `REPO_URL`, `DOWNLOAD_ZIP_URL`). This keeps editorial changes one-file.
 
 ## Design Decisions Log (MANDATORY)
 

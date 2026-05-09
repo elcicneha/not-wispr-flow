@@ -1,26 +1,180 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+
+/* ── Tailwind theme tokens ──*/
+@theme {
+  /* Colors */
+  --color-bg: var(--bg);
+  --color-bg-soft: var(--bg-soft);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-card: var(--card);
+  --color-border: var(--border);
+
+  /* Fonts */
+  --font-display: var(--font-display-var), serif;
+  --font-sans: var(--font-sans-var), system-ui, sans-serif;
+  --font-mono: var(--font-mono-var), ui-monospace, monospace;
+
+  --text-text-display: var(--text-display);
+  --text-text-h2: var(--text-h2);
+  --text-text-h3: var(--text-h3);
+  --text-text-lead: var(--text-lead);
+  --text-text-small: var(--text-small);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #E0FCA1;
+  --bg-soft: #FFF;
+  --ink: #0A4020;
+  --ink-soft: #1F6B38;
+  --accent: #0A4020;
+  --accent-contrast: #E0FCA1;
+  --card: #FFF;
+  --border: #0A4020;
+  --shadow: rgba(10, 64, 32, 0.18);
+
+  /* Typohraphy Scale */
+  --text-display: clamp(60px, 8.5vw, 140px);
+  --text-h2: clamp(40px, 5vw, 76px);
+  --text-h3: clamp(22px, 2.2vw, 32px);
+  --text-lead: clamp(17px, 1.3vw, 22px);
+  --text-small: 13px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+.dark {
+  --bg: #0A4020;
+  --bg-soft: #0E5028;
+  --ink: #E0FCA1;
+  --ink-soft: #C8E68A;
+  --accent: #E0FCA1;
+  --accent-contrast: #0A4020;
+  --card: #0E5028;
+  --border: #E0FCA1;
+  --shadow: rgba(224, 252, 161, 0.14);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+
+  /* ── Base ──────────────────────────────────────────────────── */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans text-base leading-[1.55];
+
+    transition: background-color 240ms ease, color 240ms ease;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* subtle grain overlay */
+  body::before {
+    @apply fixed inset-0 z-999 pointer-events-none opacity-25 mix-blend-multiply;
+
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 180px 180px;
+  }
+
+  p {
+    @apply text-pretty text-ink-soft;
+  }
+
+  h1 {
+    @apply font-display text-text-display leading-[0.95] tracking-[-0.03em] mb-8;
+  }
+
+  h2 {
+    @apply font-display text-text-h2 leading-[0.95] tracking-[-0.03em] mb-3;
+  }
+
+  h3 {
+    @apply font-display text-text-h3 tracking-[-0.02em] mb-4;
+  }
+
+  a {
+    color: inherit;
+  }
+
+  code {
+    @apply font-mono text-ink tracking-[0.02em];
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
+/* ── Keyframes ─────────────────────────────────────────────── */
+@keyframes wordReveal {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes marqueeScroll {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes underlineDraw {
+  from {
+    stroke-dashoffset: 300;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Home hero h1 reveal ───────────────────────────────────── */
+.home-h1 {
+  display: block;
+  opacity: 0;
+  animation: wordReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* ── Focus rings ───────────────────────────────────────────── */
+:focus-visible {
+  outline: 3px dashed var(--ink);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+/* ── Links ─────────────────────────────────────────────────── */
+@layer base {}
+
+/* ── Selection ─────────────────────────────────────────────── */
+::selection {
+  background: var(--ink);
+  color: var(--accent-contrast);
 }
