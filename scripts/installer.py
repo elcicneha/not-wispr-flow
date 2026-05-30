@@ -45,6 +45,31 @@ def step_ok(label, detail=""):
     console.print(f"  [green]✓[/] {label:<26} [dim]{detail}[/]")
 
 
+def prompt_and_save_api_key():
+    """Ask for a Groq API key and save it to the dotfile the app reads.
+
+    Returns True if a key was entered and saved, False if the user skipped.
+    The key is stored at ~/.config/notwisprflow/api_key (chmod 600), which is
+    one of the sources resolve_api_key() checks at runtime.
+    """
+    key = console.input(
+        "  Paste your Groq API key (or press Enter to skip): "
+    ).strip()
+    if not key:
+        return False
+    if not key.startswith("gsk_"):
+        console.print(
+            "    [dim]Note: Groq keys usually start with 'gsk_' — saving anyway.[/]"
+        )
+    key_dir = Path.home() / ".config" / "notwisprflow"
+    key_dir.mkdir(parents=True, exist_ok=True)
+    key_file = key_dir / "api_key"
+    key_file.write_text(key + "\n")
+    key_file.chmod(0o600)
+    step_ok("Groq API key", "saved")
+    return True
+
+
 def main():
     console.print()
     console.print("  [bold]Not Wispr Flow Installer[/]")
@@ -112,43 +137,43 @@ def main():
     if not has_api_key:
         has_api_key = bool(os.environ.get("GROQ_API_KEY", ""))
 
-    # ── Auto mode without API key: ask before building ──
+    # ── Auto mode without API key: offer to enter one inline ──
     if transcription_mode == "auto" and not has_api_key:
         console.print()
         note = Text()
         note.append("No Groq API key found.\n\n", style="bold yellow")
-        note.append("Without a key, the app runs offline only.\n")
-        note.append("For faster cloud transcription:\n\n")
-        note.append("  1. Get a free key at https://console.groq.com\n")
-        note.append("  2. Replace YOUR_KEY below and run:\n\n")
-        note.append("  mkdir -p ~/.config/notwisprflow && \\\n", style="bold")
-        note.append('  echo "YOUR_KEY" > ~/.config/notwisprflow/api_key && \\\n', style="bold")
-        note.append("  ./install.sh\n", style="bold")
+        note.append("Add one now for faster cloud transcription, or skip to\n")
+        note.append("run offline only. Get a free key at:\n\n")
+        note.append("  https://console.groq.com\n", style="bold")
         console.print(Panel(note, width=60, border_style="yellow"))
-        answer = console.input("\n  Continue with offline mode? [Y/n] ")
-        if answer.lower() == "n":
-            console.print()
-            sys.exit(0)
+        console.print()
+        if prompt_and_save_api_key():
+            has_api_key = True
+        else:
+            console.print("\n  [dim]Continuing in offline mode.[/]")
         console.print()
 
-    # ── Online mode without API key: cannot proceed ──
+    # ── Online mode without API key: must enter one to proceed ──
     if transcription_mode == "online" and not has_api_key:
         console.print()
         msg = Text()
         msg.append("Online mode requires a Groq API key.\n\n", style="bold red")
-        msg.append("  1. Get a free key at https://console.groq.com\n\n")
-        msg.append("  2. Add your key (pick one):\n\n")
-        msg.append("     Open ", style="dim")
-        msg.append("notwisprflow/config.py", style="dim bold")
-        msg.append(" and paste in:\n", style="dim")
-        msg.append('     GROQ_API_KEY = "your-key-here"\n\n', style="dim bold")
-        msg.append("     ── or run: ─────────────────────────────\n", style="dim")
-        msg.append("     mkdir -p ~/.config/notwisprflow && \\\n", style="dim")
-        msg.append('     echo "YOUR_KEY" > ~/.config/notwisprflow/api_key\n\n', style="dim")
-        msg.append("  3. Re-run ./install.sh")
+        msg.append("Get a free key at https://console.groq.com\n", style="bold")
         console.print(Panel(msg, width=60, border_style="red"))
         console.print()
-        sys.exit(1)
+        if prompt_and_save_api_key():
+            has_api_key = True
+        else:
+            console.print(
+                "\n  [red]No key entered — online mode can't run without one.[/]"
+            )
+            console.print(
+                "  [dim]Re-run ./install.sh when you have a key, or set[/]"
+            )
+            console.print(
+                "  [dim]TRANSCRIPTION_MODE = \"offline\" in notwisprflow/config.py.[/]\n"
+            )
+            sys.exit(1)
 
     # ── Step 5: Build & Install ──
     # Kill running app
